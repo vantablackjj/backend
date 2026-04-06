@@ -4,7 +4,7 @@ const jwt = require('jsonwebtoken');
 
 exports.register = async (req, res) => {
   try {
-    const { username, password, role, warehouse_id, full_name } = req.body;
+    const { username, password, role, warehouse_id, full_name, phone } = req.body;
     
     // Kiểm tra xem đã tồn tại chưa
     const existing = await User.findOne({ where: { username } });
@@ -18,7 +18,8 @@ exports.register = async (req, res) => {
       password: hashedPassword,
       role,
       warehouse_id,
-      full_name
+      full_name,
+      phone
     });
 
     res.status(201).json({ message: 'Tạo tài khoản thành công!', user: { id: user.id, username: user.username, role: user.role } });
@@ -65,9 +66,12 @@ exports.getAll = async (req, res) => {
   try {
     let attributes = { exclude: ['password'] };
     
-    // Nếu không phải ADMIN, chỉ cho xem Tên và ID (để điền vào form)
+    // Nếu không phải ADMIN, chỉ cho xem Tên và ID (để điền vào các form chọn người bán)
     if (req.user.role !== 'ADMIN') {
-        attributes = ['id', 'full_name', 'username'];
+        const users = await User.findAll({
+            attributes: ['id', 'full_name']
+        });
+        return res.json(users);
     }
 
     const users = await User.findAll({
@@ -82,12 +86,12 @@ exports.getAll = async (req, res) => {
 exports.update = async (req, res) => {
   try {
     const { id } = req.params;
-    const { username, password, role, warehouse_id, full_name } = req.body;
+    const { username, password, role, warehouse_id, full_name, phone } = req.body;
     
     const user = await User.findByPk(id);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    const updateData = { username, role, warehouse_id, full_name };
+    const updateData = { username, role, warehouse_id, full_name, phone };
     
     if (password) {
       updateData.password = await bcrypt.hash(password, 10);

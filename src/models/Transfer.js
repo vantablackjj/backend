@@ -28,6 +28,10 @@ const Transfer = sequelize.define('Transfer', {
     type: DataTypes.DECIMAL(15, 2),
     defaultValue: 0
   },
+  paid_amount_vnd: {
+    type: DataTypes.DECIMAL(15, 2),
+    defaultValue: 0
+  },
   notes: {
     type: DataTypes.TEXT
   },

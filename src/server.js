@@ -25,6 +25,8 @@ const Transfer = require('./models/Transfer');
 const TransferItem = require('./models/TransferItem');
 const TransferLog = require('./models/TransferLog');
 const Notification = require('./models/Notification');
+const TransferPayment = require('./models/TransferPayment');
+const RetailPayment = require('./models/RetailPayment');
 
 // Associations
 // 1. Vehicle
@@ -49,6 +51,9 @@ Transfer.belongsTo(Warehouse, { as: 'toWarehouse', foreignKey: 'to_warehouse_id'
 Transfer.hasMany(TransferItem, { foreignKey: 'transfer_id' });
 TransferItem.belongsTo(Transfer, { foreignKey: 'transfer_id' });
 TransferItem.belongsTo(Vehicle, { foreignKey: 'vehicle_id' });
+Transfer.hasMany(TransferPayment, { foreignKey: 'transfer_id' });
+TransferPayment.belongsTo(Transfer, { foreignKey: 'transfer_id' });
+TransferPayment.belongsTo(User, { as: 'creator', foreignKey: 'created_by' });
 
 // 5. RetailSale & Associations for Search
 RetailSale.belongsTo(User, { as: 'creator', foreignKey: 'created_by' });
@@ -56,6 +61,9 @@ RetailSale.belongsTo(User, { as: 'seller', foreignKey: 'seller_id' });
 RetailSale.belongsTo(Warehouse, { foreignKey: 'warehouse_id' });
 RetailSale.hasOne(Vehicle, { foreignKey: 'retail_sale_id' });
 Vehicle.belongsTo(RetailSale, { foreignKey: 'retail_sale_id' });
+RetailSale.hasMany(RetailPayment, { foreignKey: 'retail_sale_id', as: 'payments' });
+RetailPayment.belongsTo(RetailSale, { foreignKey: 'retail_sale_id' });
+RetailPayment.belongsTo(User, { as: 'creator', foreignKey: 'created_by' });
 
 WholesaleSale.belongsTo(User, { as: 'creator', foreignKey: 'created_by' });
 WholesaleSale.hasMany(Vehicle, { foreignKey: 'wholesale_sale_id' });

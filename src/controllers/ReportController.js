@@ -273,7 +273,11 @@ exports.getVehicleLookup = async (req, res) => {
                 sale_price: v.RetailSale?.total_price || v.WholesaleSale?.total_amount_vnd, // Note: Wholesale price is for the whole lot, might need logic adjustment if per-vehicle
                 customer_name: v.RetailSale?.customer_name || v.WholesaleSale?.WholesaleCustomer?.name || 'N/A',
                 address: v.RetailSale?.address || v.WholesaleSale?.WholesaleCustomer?.address || 'N/A',
-                guarantee: v.RetailSale?.guarantee || 'Không'
+                guarantee: v.RetailSale?.guarantee || 'Không',
+                payment_method: v.RetailSale?.payment_method,
+                bank_name: v.RetailSale?.bank_name,
+                contract_number: v.RetailSale?.contract_number,
+                loan_amount: v.RetailSale?.loan_amount
             };
         });
 
@@ -354,11 +358,10 @@ exports.getInventoryReport = async (req, res) => {
         const { warehouse_id, type_id, color_id } = req.query;
         let where = { status: { [Op.ne]: 'Sold' } }; // Lấy tồn kho (bao gồm cả xe đang chuyển)
 
-        // Áp dụng bộ lọc quyền hạn Source of Truth
-        if (req.user.role !== 'ADMIN') {
-            where.warehouse_id = req.user.warehouse_id;
-        } else if (warehouse_id) {
-            where.warehouse_id = warehouse_id;
+        // Áp dụng bộ lọc (Mặc định là kho của mình nếu là nhân viên và không chọn kho khác)
+        const targetWH = warehouse_id || (req.user.role !== 'ADMIN' ? req.user.warehouse_id : null);
+        if (targetWH) {
+            where.warehouse_id = targetWH;
         }
 
         if (type_id) where.type_id = type_id;

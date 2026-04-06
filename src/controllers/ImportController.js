@@ -151,6 +151,10 @@ const importData = async (req, res) => {
                     total_price: row.sale_price,
                     paid_amount: row.paid_amount || row.sale_price,
                     guarantee: row.guarantee || 'Không',
+                    payment_method: row.payment_method || 'Trả thẳng',
+                    bank_name: row.bank_name || '',
+                    contract_number: row.contract_number || '',
+                    loan_amount: row.loan_amount || 0,
                     warehouse_id: vWarehouse.id,
                     created_by: req.user.id
                 }, { transaction: t });

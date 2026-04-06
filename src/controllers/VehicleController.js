@@ -63,3 +63,26 @@ exports.getById = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+exports.delete = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const vehicle = await Vehicle.findByPk(id);
+        if (!vehicle) return res.status(404).json({ message: 'Không tìm thấy xe' });
+
+        // KIỂM TRA QUYỀN
+        if (req.user.role !== 'ADMIN' && vehicle.warehouse_id !== req.user.warehouse_id) {
+            return res.status(403).json({ message: 'Bạn không có quyền xóa xe của kho khác' });
+        }
+
+        // Nếu xe đã bán hoặc đang khóa thì không cho xóa ngang xương
+        if (vehicle.status !== 'In Stock') {
+            return res.status(400).json({ message: 'Không thể xóa xe đã bán hoặc đang được chuyển kho. Hãy hủy đơn bán trước.' });
+        }
+
+        await vehicle.destroy();
+        res.json({ message: 'Đã xóa xe thành công' });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+}

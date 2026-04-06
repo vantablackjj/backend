@@ -27,6 +27,9 @@ const User = sequelize.define('User', {
   },
   full_name: {
     type: DataTypes.STRING
+  },
+  phone: {
+    type: DataTypes.STRING
   }
 }, {
   timestamps: true

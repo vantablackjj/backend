@@ -1,6 +1,9 @@
 const RetailSale = require('../models/RetailSale');
 const Vehicle = require('../models/Vehicle');
 const User = require('../models/User');
+const Warehouse = require('../models/Warehouse');
+const VehicleType = require('../models/VehicleType');
+const VehicleColor = require('../models/VehicleColor');
 const sequelize = require('../config/database');
 
 exports.create = async (req, res) => {
@@ -11,7 +14,8 @@ exports.create = async (req, res) => {
       sale_date, notes, address, id_card, phone, gender, 
       sale_type, guarantee, guarantor_name, guarantor_phone,
       seller_id,
-      warehouse_id: bodyWH 
+      warehouse_id: bodyWH,
+      payment_method, bank_name, contract_number, loan_amount
     } = req.body;
 
     // XÁC ĐỊNH NGƯỜI BÁN THỰC TẾ (Source of Truth)
@@ -56,6 +60,10 @@ exports.create = async (req, res) => {
       seller_id: actualSellerId,
 
       warehouse_id: activeWarehouseId, // Quan trọng: Truy vết kho bán
+      payment_method,
+      bank_name,
+      contract_number,
+      loan_amount,
       created_by: req.user.id
     }, { transaction });
 
@@ -97,7 +105,17 @@ exports.getAll = async (req, res) => {
       where,
       order: [['sale_date', 'DESC']],
       attributes: { include: [['total_price', 'sale_price']] },
-      include: [{ model: User, as: 'seller', attributes: ['full_name'] }]
+      include: [
+        { model: User, as: 'seller', attributes: ['full_name', 'phone'] },
+        { model: Warehouse },
+        { 
+          model: Vehicle, 
+          include: [
+            { model: VehicleType, attributes: ['name'] },
+            { model: VehicleColor, attributes: ['color_name'] }
+          ] 
+        }
+      ]
     });
     res.json(list);
 

@@ -4,6 +4,7 @@ const TransferLog = require('../models/TransferLog');
 const Notification = require('../models/Notification');
 const Vehicle = require('../models/Vehicle');
 const User = require('../models/User');
+const TransferPayment = require('../models/TransferPayment');
 
 const { Op } = require('sequelize');
 const sequelize = require('../config/database');
@@ -266,8 +267,9 @@ exports.getDetails = async (req, res) => {
         const vehicleIds = items.map(i => i.vehicle_id);
         const vehicles = await Vehicle.findAll({ where: { id: vehicleIds } });
         const logs = await TransferLog.findAll({ where: { transfer_id: id }, order: [['timestamp', 'ASC']] });
+        const payments = await TransferPayment.findAll({ where: { transfer_id: id }, order: [['payment_date', 'ASC']] });
 
-        res.json({ transfer, vehicles, logs });
+        res.json({ transfer, vehicles, logs, payments });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -394,6 +396,46 @@ exports.markAsRead = async (req, res) => {
         await Notification.update({ is_read: true }, { where: { id } });
         res.json({ success: true });
     } catch (e) {
+        res.status(500).json({ message: e.message });
+    }
+};
+
+exports.addPayment = async (req, res) => {
+    const t = await sequelize.transaction();
+    try {
+        const { transfer_id, amount_paid_vnd, payment_date, payment_method, notes } = req.body;
+        
+        const transfer = await Transfer.findByPk(transfer_id);
+        if (!transfer) throw new Error('Không tìm thấy phiếu chuyển!');
+
+        // 1. Tạo bản ghi thanh toán
+        await TransferPayment.create({
+            transfer_id,
+            amount_paid_vnd,
+            payment_date: payment_date || new Date(),
+            payment_method: payment_method || 'Cash',
+            notes,
+            created_by: req.user.id
+        }, { transaction: t });
+
+        // 2. Cập nhật số tiền đã trả trên phiếu
+        const newPaidAmount = Number(transfer.paid_amount_vnd || 0) + Number(amount_paid_vnd);
+        transfer.paid_amount_vnd = newPaidAmount;
+        await transfer.save({ transaction: t });
+
+        // 3. Log
+        await TransferLog.create({
+            transfer_id,
+            user_id: req.user.id,
+            action: 'PAYMENT',
+            details: `Đã thanh toán ${Number(amount_paid_vnd).toLocaleString()} đ qua ${payment_method}.`,
+            timestamp: new Date()
+        }, { transaction: t });
+
+        await t.commit();
+        res.json({ message: 'Ghi nhận thanh toán thành công!', paid_amount: transfer.paid_amount_vnd });
+    } catch (e) {
+        await t.rollback();
         res.status(500).json({ message: e.message });
     }
 };

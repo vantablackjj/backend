@@ -79,6 +79,22 @@ const RetailSale = sequelize.define('RetailSale', {
     type: DataTypes.UUID,
     allowNull: true
   },
+  payment_method: {
+    type: DataTypes.ENUM('Trả thẳng', 'Trả góp'),
+    defaultValue: 'Trả thẳng'
+  },
+  bank_name: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  contract_number: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  loan_amount: {
+    type: DataTypes.DECIMAL(15, 2),
+    defaultValue: 0
+  },
   created_by: {
     type: DataTypes.UUID,
     allowNull: true

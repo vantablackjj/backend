@@ -8,6 +8,7 @@ const wholesaleController = require('../controllers/WholesaleSaleController');
 const inventoryController = require('../controllers/InventoryController');
 const transferController = require('../controllers/TransferController');
 const vehicleController = require('../controllers/VehicleController');
+const retailPaymentController = require('../controllers/RetailPaymentController');
 const Vehicle = require('../models/Vehicle');
 
 const { isAdmin } = require('../middleware/authMiddleware');
@@ -16,6 +17,9 @@ const { isAdmin } = require('../middleware/authMiddleware');
 router.get('/retail-sales', retailController.getAll);
 router.post('/retail-sales', retailController.create);
 router.delete('/retail-sales/:id', isAdmin, retailController.delete);
+router.get('/retail-sales/:id/payments', retailPaymentController.getPaymentsBySale); // Get all payments for a sale
+router.post('/retail-payments', retailPaymentController.addPayment); // Add a new payment
+router.delete('/retail-payments/:id', isAdmin, retailPaymentController.deletePayment); // Delete a payment record
 
 // Expenses
 router.get('/expenses', isAdmin, expenseController.getAll);
@@ -42,6 +46,7 @@ router.get('/inventory/check', inventoryController.getByEngineNo);
 // Vehicles
 router.get('/vehicles', vehicleController.getAll);
 router.get('/vehicles/:id', vehicleController.getById);
+router.delete('/vehicles/:id', isAdmin, vehicleController.delete);
 
 // Transfer
 router.get('/transfers', transferController.getTransfers);
@@ -51,16 +56,33 @@ router.put('/transfers/:id', isAdmin, transferController.updateTransfer);
 router.post('/transfers/:id/approve', isAdmin, transferController.approveTransfer);
 router.post('/transfers/:id/receive', transferController.receiveTransfer);
 router.post('/transfers/:id/cancel', transferController.cancelTransfer);
+router.post('/transfers/payment', isAdmin, transferController.addPayment);
 
 // Notification routes removed from here, now handled in notificationRoutes.js
 
 
+const { Op } = require('sequelize');
+const TransferItem = require('../models/TransferItem');
 // Utility for fetching vehicles in specific warehouse
 router.get('/vehicles-in-warehouse/:warehouse_id', async (req, res) => {
     try {
         const { warehouse_id } = req.params;
+        const { include_transfer_id } = req.query;
+
+        let selectedIds = [];
+        if (include_transfer_id) {
+            const items = await TransferItem.findAll({ where: { transfer_id: include_transfer_id } });
+            selectedIds = items.map(i => i.vehicle_id);
+        }
+
         const list = await Vehicle.findAll({ 
-            where: { warehouse_id, status: 'In Stock' }
+            where: { 
+                warehouse_id,
+                [Op.or]: [
+                    { status: 'In Stock' },
+                    { id: selectedIds }
+                ]
+            }
         });
 
         res.json(list);
