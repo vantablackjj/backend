@@ -144,7 +144,7 @@ app.use('/api', verifyToken, businessRoutes);
 app.use('/api/reports', verifyToken, require('./routes/reportRoutes'));
 app.use('/api/notifications', verifyToken, require('./routes/notificationRoutes'));
 app.use('/api/dashboard', verifyToken, isAdmin, require('./routes/dashboardRoutes'));
-app.use('/api/import', verifyToken, isAdmin, require('./routes/importRoutes'));
+app.use('/api/import', verifyToken, require('./routes/importRoutes'));
 
 
 app.get('/', (req, res) => {

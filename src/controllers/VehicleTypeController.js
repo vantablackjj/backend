@@ -27,3 +27,16 @@ exports.delete = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+exports.update = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const type = await VehicleType.findByPk(id);
+    if (!type) {
+      return res.status(404).json({ message: 'Danh mục loại xe không tồn tại' });
+    }
+    await type.update(req.body);
+    res.json(type);
+  } catch (error) {
+    res.status(400).json({ message: error.message });
+  }
+};

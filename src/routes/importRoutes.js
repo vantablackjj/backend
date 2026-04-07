@@ -7,6 +7,6 @@ const { verifyToken, isAdmin } = require('../middleware/authMiddleware');
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
-router.post('/', verifyToken, isAdmin, upload.single('file'), importData);
+router.post('/', verifyToken, upload.single('file'), importData);
 
 module.exports = router;

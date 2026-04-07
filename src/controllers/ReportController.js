@@ -11,6 +11,10 @@ const VehicleType = require('../models/VehicleType');
 const VehicleColor = require('../models/VehicleColor');
 const User = require('../models/User');
 const WholesalePayment = require('../models/WholesalePayment');
+const RetailPayment = require('../models/RetailPayment');
+const PurchasePayment = require('../models/PurchasePayment');
+const TransferPayment = require('../models/TransferPayment');
+const Expense = require('../models/Expense');
 const sequelize = require('../config/database');
 const { Op } = require('sequelize');
 const dayjs = require('dayjs');
@@ -216,11 +220,9 @@ exports.getVehicleLookup = async (req, res) => {
                 if (engine_no) where.engine_no = { [Op.iLike]: `%${engine_no}%` };
                 if (chassis_no) where.chassis_no = { [Op.iLike]: `%${chassis_no}%` };
             } else if (type === 'SALE_DATE') {
-                // This is tricky because it can be Retail or Wholesale
-                // We'll use a manual check or a complex include
-                // For simplicity, we filter vehicles where either Retail or Wholesale matches the date
-                // But Sequelize includes are easier if we just fetch all and filter in JS if needed, 
-                // OR use Op.or on the includes.
+                // Handled in JS filter below for simplicity with nested models
+            } else if (req.query.customer_name) {
+                // If searching by customer name specifically
             } else {
                 // IMPORT_DATE_IMPORTER criteria but for SOLD vehicles
                 let purchaseWhere = {};
@@ -231,6 +233,18 @@ exports.getVehicleLookup = async (req, res) => {
             }
         }
 
+        // ADD CUSTOMER NAME FILTER (RETAIL & WHOLESALE)
+        const { customer_name } = req.query;
+        if (customer_name) {
+            retailInclude.where = { customer_name: { [Op.iLike]: `%${customer_name}%` } };
+            wholesaleInclude.include = [{ 
+                model: WholesaleCustomer, 
+                where: { name: { [Op.iLike]: `%${customer_name}%` } },
+                attributes: ['name', 'address'] 
+            }];
+            // We'll use JS filtering for the "OR" logic between retail and wholesale below
+        }
+
         const vehicles = await Vehicle.findAll({
             where,
             include: includes,
@@ -239,16 +253,31 @@ exports.getVehicleLookup = async (req, res) => {
                 : [[Purchase, 'purchase_date', 'DESC']]
         });
 
-        // Post-process for "SALE_DATE" type if mode is SALE
+        // Post-process for "SALE_DATE" or "CUSTOMER_NAME"
         let filteredVehicles = vehicles;
-        if (mode === 'SALE' && type === 'SALE_DATE' && from_date && to_date) {
+        if (customer_name || (mode === 'SALE' && type === 'SALE_DATE' && from_date && to_date)) {
             filteredVehicles = vehicles.filter(v => {
-                const retailDate = v.RetailSale?.sale_date;
-                const wholesaleDate = v.WholesaleSale?.sale_date;
-                const dateToCheck = retailDate || wholesaleDate;
-                if (!dateToCheck) return false;
-                const d = new Date(dateToCheck);
-                return d >= new Date(from_date) && d <= new Date(to_date);
+                // 1. Filter by Name if provided
+                if (customer_name) {
+                    const rName = v.RetailSale?.customer_name || '';
+                    const wName = v.WholesaleSale?.WholesaleCustomer?.name || '';
+                    if (!rName.toLowerCase().includes(customer_name.toLowerCase()) && 
+                        !wName.toLowerCase().includes(customer_name.toLowerCase())) {
+                        return false;
+                    }
+                }
+
+                // 2. Filter by Date if provided
+                if (mode === 'SALE' && type === 'SALE_DATE' && from_date && to_date) {
+                    const retailDate = v.RetailSale?.sale_date;
+                    const wholesaleDate = v.WholesaleSale?.sale_date;
+                    const dateToCheck = retailDate || wholesaleDate;
+                    if (!dateToCheck) return false;
+                    const d = new Date(dateToCheck);
+                    return d >= new Date(from_date) && d <= new Date(to_date);
+                }
+
+                return true;
             });
         }
 
@@ -583,3 +612,99 @@ exports.getWarrantyReport = async (req, res) => {
     }
 };
 
+
+exports.getDailyReport = async (req, res) => {
+    try {
+        const { date, warehouse_id } = req.query;
+        const targetDate = date ? dayjs(date).startOf('day') : dayjs().startOf('day');
+        const start = targetDate.toDate();
+        const end = targetDate.endOf('day').toDate();
+
+        let whereShared = {
+            [Op.and]: [
+                sequelize.where(sequelize.fn('date', sequelize.col('createdAt')), targetDate.format('YYYY-MM-DD'))
+            ]
+        };
+
+        // If using transaction dates (preferred for bookkeeping)
+        let retailDateWhere = { sale_date: { [Op.between]: [start, end] } };
+        let wholesaleDateWhere = { sale_date: { [Op.between]: [start, end] } };
+        let purchaseDateWhere = { purchase_date: { [Op.between]: [start, end] } };
+        
+        let retailPaymentWhere = { payment_date: { [Op.between]: [start, end] } };
+        let wholesalePaymentWhere = { payment_date: { [Op.between]: [start, end] } };
+        let purchasePaymentWhere = { payment_date: { [Op.between]: [start, end] } };
+        let transferPaymentWhere = { payment_date: { [Op.between]: [start, end] } };
+        let expenseWhere = { createdAt: { [Op.between]: [start, end] } }; // Expenses usually use createdAt
+
+        // Filter by warehouse if provided or if user is limited
+        const targetWH = warehouse_id || (req.user.role !== 'ADMIN' ? req.user.warehouse_id : null);
+        if (targetWH) {
+            retailDateWhere.warehouse_id = targetWH;
+            wholesaleDateWhere.warehouse_id = targetWH;
+            purchaseDateWhere.warehouse_id = targetWH;
+            expenseWhere.warehouse_id = targetWH;
+            // For payments, we rely on the parent's warehouse. 
+            // In these simplified queries, we'll filter them if needed by joining.
+        }
+
+        // 1. RETAIL SALES SUMMARY
+        const retailSales = await RetailSale.findAll({ 
+            where: retailDateWhere,
+            include: [{ model: Vehicle, attributes: ['price_vnd'] }] 
+        });
+        const retailRevenue = retailSales.reduce((sum, s) => sum + Number(s.total_price || 0), 0);
+        const retailCount = retailSales.length;
+
+        // 2. WHOLESALE SALES SUMMARY
+        const wholesaleSales = await WholesaleSale.findAll({ where: wholesaleDateWhere });
+        const wholesaleRevenue = wholesaleSales.reduce((sum, s) => sum + Number(s.total_amount_vnd || 0), 0);
+        const wholesaleCount = await Vehicle.count({ where: { wholesale_sale_id: { [Op.in]: wholesaleSales.map(s => s.id) } } });
+
+        // 3. COLLECTIONS (Cash In)
+        // From today's retail sales instant payments
+        const retailInstantPaid = retailSales.reduce((sum, s) => sum + Number(s.paid_amount || 0), 0);
+        // From previous/other retail payments today
+        const retailInstallmentPaid = await RetailPayment.sum('amount', { where: retailPaymentWhere });
+
+        // From today's wholesale instant payments
+        const wholesaleInstantPaid = wholesaleSales.reduce((sum, s) => sum + Number(s.paid_amount_vnd || 0), 0);
+        // From previous/other wholesale payments today
+        const wholesaleInstallmentPaid = await WholesalePayment.sum('amount_paid_vnd', { where: wholesalePaymentWhere });
+
+        const collections = Number(retailInstantPaid || 0) + Number(retailInstallmentPaid || 0) + 
+                          Number(wholesaleInstantPaid || 0) + Number(wholesaleInstallmentPaid || 0);
+
+        // 4. PURCHASES (Outflow)
+        const purchases = await Purchase.findAll({ where: purchaseDateWhere });
+        const purchaseTotal = purchases.reduce((sum, s) => sum + Number(s.total_amount_vnd || 0), 0);
+        const purchaseInstantPaid = purchases.reduce((sum, s) => sum + Number(s.paid_amount_vnd || 0), 0);
+        const purchaseInstallmentPaid = await PurchasePayment.sum('amount_paid_vnd', { where: purchasePaymentWhere });
+        
+        const outflow = Number(purchaseInstantPaid || 0) + Number(purchaseInstallmentPaid || 0);
+
+        // 5. EXPENSES
+        const expensesTotal = await Expense.sum('amount', { where: expenseWhere });
+
+        res.json({
+            date: targetDate.format('YYYY-MM-DD'),
+            metrics: {
+                totalRevenue: retailRevenue + wholesaleRevenue,
+                retailRevenue,
+                wholesaleRevenue,
+                retailCount,
+                wholesaleCount,
+                purchaseCount: await Vehicle.count({ where: { purchase_id: { [Op.in]: purchases.map(p => p.id) } } }),
+                totalIncome: collections,
+                totalOutcome: outflow + (expensesTotal || 0),
+                collections,
+                purchasesPaid: outflow,
+                expenses: expensesTotal || 0,
+                netCashFlow: collections - (outflow + (expensesTotal || 0))
+            }
+        });
+
+    } catch (e) {
+        res.status(500).json({ message: e.message });
+    }
+};

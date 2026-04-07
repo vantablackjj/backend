@@ -13,6 +13,7 @@ router.get('/general', reportController.getGeneralReport);
 router.get('/wholesale-audit', reportController.getWholesaleAudit);
 router.get('/retail-sales-report', reportController.getRetailSalesReport);
 router.get('/warranty-report', reportController.getWarrantyReport);
+router.get('/daily', reportController.getDailyReport);
 
 
 module.exports = router;

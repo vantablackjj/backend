@@ -30,6 +30,22 @@ const User = sequelize.define('User', {
   },
   phone: {
     type: DataTypes.STRING
+  },
+  can_manage_debt: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
+  },
+  can_delete: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
+  },
+  can_manage_money: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
+  },
+  can_manage_spare_parts: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
   }
 }, {
   timestamps: true

@@ -22,6 +22,10 @@ const VehicleType = sequelize.define('VehicleType', {
   engine_prefix: {
     type: DataTypes.STRING,
     allowNull: true
+  },
+  suggested_price: {
+    type: DataTypes.DECIMAL(15, 2),
+    defaultValue: 0
   }
 }, {
   timestamps: true

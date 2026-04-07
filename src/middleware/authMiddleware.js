@@ -29,3 +29,38 @@ exports.isAdmin = (req, res, next) => {
     return res.status(403).json({ message: 'Bạn không có quyền thực hiện hành động này! (Yêu cầu quyền Admin)' });
   }
 };
+// Middleware kiểm tra quyền QUẢN LÝ CÔNG NỢ (Admin hoặc Staff có quyền)
+exports.canManageDebt = (req, res, next) => {
+  if (req.user && (req.user.role === 'ADMIN' || req.user.can_manage_debt)) {
+    next();
+  } else {
+    return res.status(403).json({ message: 'Bạn không có quyền thực hiện hành động này! (Yêu cầu quyền Quản lý công nợ)' });
+  }
+};
+
+// Middleware kiểm tra quyền HỦY ĐƠN (Admin hoặc Staff có quyền)
+exports.canDelete = (req, res, next) => {
+  if (req.user && (req.user.role === 'ADMIN' || req.user.can_delete)) {
+    next();
+  } else {
+    return res.status(403).json({ message: 'Bạn không có quyền thực hiện hành động này! (Yêu cầu quyền Hủy đơn/Xóa)' });
+  }
+};
+
+// Middleware kiểm tra quyền QUẢN LÝ TIỀN (Admin hoặc Staff có quyền)
+exports.canManageMoney = (req, res, next) => {
+  if (req.user && (req.user.role === 'ADMIN' || req.user.can_manage_money)) {
+    next();
+  } else {
+    return res.status(403).json({ message: 'Bạn không có quyền thực hiện hành động này! (Yêu cầu quyền Quản lý tiền)' });
+  }
+};
+
+// Middleware kiểm tra quyền QUẢN LÝ PHỤ TÙNG (Admin hoặc Staff có quyền)
+exports.canManageSpareParts = (req, res, next) => {
+  if (req.user && (req.user.role === 'ADMIN' || req.user.can_manage_spare_parts)) {
+    next();
+  } else {
+    return res.status(403).json({ message: 'Bạn không có quyền thực hiện hành động này! (Yêu cầu quyền Quản lý phụ tùng)' });
+  }
+};

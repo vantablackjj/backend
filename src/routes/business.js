@@ -11,15 +11,15 @@ const vehicleController = require('../controllers/VehicleController');
 const retailPaymentController = require('../controllers/RetailPaymentController');
 const Vehicle = require('../models/Vehicle');
 
-const { isAdmin } = require('../middleware/authMiddleware');
+const { isAdmin, canManageDebt, canDelete, canManageMoney } = require('../middleware/authMiddleware');
 
 // Retail Sales
 router.get('/retail-sales', retailController.getAll);
 router.post('/retail-sales', retailController.create);
-router.delete('/retail-sales/:id', isAdmin, retailController.delete);
+router.delete('/retail-sales/:id', canDelete, retailController.delete);
 router.get('/retail-sales/:id/payments', retailPaymentController.getPaymentsBySale); // Get all payments for a sale
-router.post('/retail-payments', retailPaymentController.addPayment); // Add a new payment
-router.delete('/retail-payments/:id', isAdmin, retailPaymentController.deletePayment); // Delete a payment record
+router.post('/retail-payments', canManageMoney, retailPaymentController.addPayment); // Add a new payment
+router.delete('/retail-payments/:id', canManageMoney, retailPaymentController.deletePayment); // Delete a payment record
 
 // Expenses
 router.get('/expenses', isAdmin, expenseController.getAll);
@@ -30,13 +30,13 @@ router.delete('/expenses/:id', isAdmin, expenseController.delete);
 router.get('/purchases', purchaseController.getBySupplier);
 router.post('/purchases', purchaseController.createPurchase);
 router.get('/purchases/:id/details', purchaseController.getPurchaseDetails);
-router.post('/purchases/payment', isAdmin, purchaseController.addPayment);
+router.post('/purchases/payment', canManageMoney, purchaseController.addPayment);
 
 // Wholesale Sales
 router.get('/wholesale-sales', wholesaleController.getByCustomer);
 router.post('/wholesale-sales', wholesaleController.createSale);
 router.get('/wholesale-sales/:id/details', wholesaleController.getSaleDetails);
-router.post('/wholesale-sales/payment', isAdmin, wholesaleController.addPayment);
+router.post('/wholesale-sales/payment', canManageMoney, wholesaleController.addPayment);
 
 // Inventory
 router.get('/inventory/available', inventoryController.getAvailable);
@@ -56,7 +56,7 @@ router.put('/transfers/:id', isAdmin, transferController.updateTransfer);
 router.post('/transfers/:id/approve', isAdmin, transferController.approveTransfer);
 router.post('/transfers/:id/receive', transferController.receiveTransfer);
 router.post('/transfers/:id/cancel', transferController.cancelTransfer);
-router.post('/transfers/payment', isAdmin, transferController.addPayment);
+router.post('/transfers/payment', canManageMoney, transferController.addPayment);
 
 // Notification routes removed from here, now handled in notificationRoutes.js
 

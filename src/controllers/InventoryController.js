@@ -19,6 +19,10 @@ exports.getAvailable = async (req, res) => {
 
     const list = await Vehicle.findAll({
       where,
+      include: [
+        { model: VehicleType, attributes: ["name", "type", "suggested_price"] },
+        { model: VehicleColor, attributes: ["color_name"] },
+      ],
       order: [["engine_no", "ASC"]],
     });
 

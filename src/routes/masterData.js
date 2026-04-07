@@ -18,6 +18,7 @@ router.delete('/colors/:id', isAdmin, colorController.delete);
 // Vehicle Types
 router.get('/vehicle-types', typeController.getAll);
 router.post('/vehicle-types', isAdmin, typeController.create);
+router.put('/vehicle-types/:id', isAdmin, typeController.update);
 router.delete('/vehicle-types/:id', isAdmin, typeController.delete);
 
 // Suppliers

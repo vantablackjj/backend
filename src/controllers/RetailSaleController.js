@@ -46,7 +46,7 @@ exports.create = async (req, res) => {
       chassis_no: vehicle.chassis_no,
       customer_name,
       total_price: sale_price,
-      paid_amount: paid_amount || sale_price,
+      paid_amount: (paid_amount !== undefined) ? paid_amount : sale_price,
       sale_date,
       notes,
       address,

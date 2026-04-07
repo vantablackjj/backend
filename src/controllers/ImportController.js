@@ -10,6 +10,7 @@ const Purchase = require('../models/Purchase');
 const RetailSale = require('../models/RetailSale');
 const WholesaleSale = require('../models/WholesaleSale');
 const { Op } = require('sequelize');
+const { sendNotification } = require('../utils/notificationHelper');
 
 const importData = async (req, res) => {
   const t = await sequelize.transaction();
@@ -21,7 +22,56 @@ const importData = async (req, res) => {
     const { type } = req.body;
     const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
-    const data = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
+    const rawData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
+
+    // Header mapping: Vietnamese -> English (Lowercase & Trimmed)
+    const headerMap = {
+      'ngày bán': 'sale_date',
+      'ngày nhập': 'purchase_date',
+      'số máy': 'engine_no',
+      'số khung': 'chassis_no',
+      'tên kho': 'warehouse_name',
+      'kho': 'warehouse_name',
+      'ghi chú': 'notes',
+      'địa chỉ': 'address',
+      'tên màu': 'color_name',
+      'màu sắc': 'color_name',
+      'tên loại xe': 'name',
+      'loại xe': 'name',
+      'phân loại': 'type',
+      'tiền tố khung': 'chassis_prefix',
+      'tiền tố máy': 'engine_prefix',
+      'mã khách hàng': 'customer_code',
+      'mã khách': 'customer_code',
+      'tên khách': 'customer_name', 
+      'tên khách hàng': 'customer_name',
+      'tên ncc': 'supplier_name',
+      'nhà cung cấp': 'supplier_name',
+      'hình thức tt': 'payment_type',
+      'giá nhập': 'price_vnd',
+      'số điện thoại': 'phone',
+      'giá bán': 'sale_price',
+      'total': 'sale_price',
+      'tiền khách trả': 'paid_amount',
+      'thanh toán': 'paid_amount',
+      'bảo hành': 'guarantee',
+      'phát sổ bảo hành': 'guarantee',
+      'giá bán buôn': 'sale_price_vnd',
+      'giá bán lẻ': 'sale_price_vnd', 
+      'tiền khách trả buôn': 'paid_amount_vnd',
+      'đã trả': 'paid_amount_vnd',
+    };
+
+    // Normalize data: Map Vietnamese headers to English keys
+    const data = rawData.map(row => {
+      const newRow = {};
+      Object.keys(row).forEach(key => {
+        const cleanKey = key.trim().toLowerCase();
+        const normalizedKey = headerMap[cleanKey] || key;
+        newRow[normalizedKey] = row[key];
+      });
+      return newRow;
+    });
 
     let results = { success: 0, failed: 0, errors: [] };
 
@@ -36,9 +86,9 @@ const importData = async (req, res) => {
             break;
 
           case 'types':
-            if (row.name && row.type) {
+            if ((row.name || row.type_name) && row.type) {
               await VehicleType.findOrCreate({ 
-                where: { name: row.name }, 
+                where: { name: row.name || row.type_name }, 
                 defaults: { 
                   type: row.type, 
                   chassis_prefix: row.chassis_prefix || '', 
@@ -51,11 +101,12 @@ const importData = async (req, res) => {
             break;
 
           case 'customers':
-            if (row.name && row.customer_code) {
+            const cName = row.customer_name || row.name;
+            if (cName && row.customer_code) {
               await WholesaleCustomer.findOrCreate({ 
                 where: { customer_code: row.customer_code }, 
                 defaults: { 
-                    name: row.name, 
+                    name: cName, 
                     address: row.address || '', 
                     payment_type: row.payment_type || 'Trả gộp' 
                 },
@@ -66,9 +117,10 @@ const importData = async (req, res) => {
             break;
 
           case 'suppliers':
-            if (row.name) {
+            const sName = row.supplier_name || row.name;
+            if (sName) {
               await Supplier.findOrCreate({ 
-                where: { name: row.name }, 
+                where: { name: sName }, 
                 defaults: { 
                     address: row.address || '', 
                     notes: row.notes || '', 
@@ -81,14 +133,17 @@ const importData = async (req, res) => {
             break;
 
           case 'purchases':
-            if (row.engine_no && row.chassis_no && row.type_name && row.color_name && row.supplier_name && row.warehouse_name) {
-              // 1. Find or create Master Data
+            if (row.engine_no && row.chassis_no && row.name && row.color_name && row.supplier_name && row.warehouse_name) {
+              // Master Data Validation - STRICT
               const [vColor] = await VehicleColor.findOrCreate({ where: { color_name: row.color_name }, transaction: t });
-              const [vType] = await VehicleType.findOrCreate({ where: { name: row.type_name }, defaults: { type: 'Xe mới' }, transaction: t });
-              const [vSupplier] = await Supplier.findOrCreate({ where: { name: row.supplier_name }, transaction: t });
-              const [vWarehouse] = await Warehouse.findOrCreate({ where: { warehouse_name: row.warehouse_name }, transaction: t });
+              const [vType] = await VehicleType.findOrCreate({ where: { name: row.name }, defaults: { type: 'Xe mới' }, transaction: t });
+              
+              const vSupplier = await Supplier.findOne({ where: { name: row.supplier_name }, transaction: t });
+              if (!vSupplier) throw new Error(`Nhà cung cấp '${row.supplier_name}' không tồn tại trong danh mục.`);
+              
+              const vWarehouse = await Warehouse.findOne({ where: { warehouse_name: row.warehouse_name }, transaction: t });
+              if (!vWarehouse) throw new Error(`Kho '${row.warehouse_name}' không tồn tại trong danh mục.`);
 
-              // 2. Create Purchase (One per row for simplicity in old data import, or you could group by date/supplier)
               const purchaseDate = row.purchase_date ? new Date(row.purchase_date) : new Date();
               const [vPurchase] = await Purchase.findOrCreate({
                 where: {
@@ -99,13 +154,12 @@ const importData = async (req, res) => {
                 defaults: {
                   supplier_id: vSupplier.id,
                   warehouse_id: vWarehouse.id,
-                  purchase_date: row.purchase_date ? new Date(row.purchase_date) : new Date(),
+                  purchase_date: purchaseDate,
                   created_by: req.user.id
                 },
                 transaction: t
               });
 
-              // 3. Create Vehicle
               const [vehicle, created] = await Vehicle.findOrCreate({
                 where: { engine_no: row.engine_no },
                 defaults: {
@@ -114,19 +168,18 @@ const importData = async (req, res) => {
                   color_id: vColor.id,
                   warehouse_id: vWarehouse.id,
                   purchase_id: vPurchase.id,
-                  price_vnd: row.price_vnd || 0,
+                  price_vnd: Number(row.price_vnd) || 0,
                   status: 'In Stock'
                 },
                 transaction: t
               });
 
               if (created) {
-                // Update Purchase total
-                await vPurchase.increment('total_amount_vnd', { by: row.price_vnd || 0, transaction: t });
+                await vPurchase.increment('total_amount_vnd', { by: Number(row.price_vnd) || 0, transaction: t });
                 results.success++;
               } else {
                  results.failed++;
-                 results.errors.push(`Số máy ${row.engine_no} đã tồn tại trong hệ thống.`);
+                 results.errors.push(`Số máy ${row.engine_no} đã tồn tại.`);
               }
             }
             break;
@@ -134,13 +187,12 @@ const importData = async (req, res) => {
           case 'retail_sales':
              if (row.engine_no && row.customer_name && row.sale_price) {
                 const vehicle = await Vehicle.findOne({ where: { engine_no: row.engine_no, status: 'In Stock' }, transaction: t });
-                if (!vehicle) {
-                    results.failed++;
-                    results.errors.push(`Số máy ${row.engine_no} không tồn tại hoặc đã bán.`);
-                    break;
-                }
-                const [vWarehouse] = await Warehouse.findOrCreate({ where: { warehouse_name: row.warehouse_name || 'Kho mặc định' }, transaction: t });
+                if (!vehicle) throw new Error(`Số máy ${row.engine_no} không tồn tại hoặc đã bán.`);
                 
+                const vWarehouse = await Warehouse.findOne({ where: { warehouse_name: row.warehouse_name || 'Kho mặc định' }, transaction: t });
+                if (!vWarehouse) throw new Error(`Kho '${row.warehouse_name}' không tồn tại.`);
+                
+                const guaranteeValue = (String(row.guarantee).toLowerCase() === 'có' || row.guarantee === true) ? 'Có' : 'Không';
                 const sale = await RetailSale.create({
                     sale_date: row.sale_date ? new Date(row.sale_date) : new Date(),
                     customer_name: row.customer_name,
@@ -148,13 +200,10 @@ const importData = async (req, res) => {
                     address: row.address || '',
                     engine_no: vehicle.engine_no,
                     chassis_no: vehicle.chassis_no,
-                    total_price: row.sale_price,
-                    paid_amount: row.paid_amount || row.sale_price,
-                    guarantee: row.guarantee || 'Không',
+                    total_price: Number(row.sale_price),
+                    paid_amount: Number(row.paid_amount || row.sale_price),
+                    guarantee: guaranteeValue,
                     payment_method: row.payment_method || 'Trả thẳng',
-                    bank_name: row.bank_name || '',
-                    contract_number: row.contract_number || '',
-                    loan_amount: row.loan_amount || 0,
                     warehouse_id: vWarehouse.id,
                     created_by: req.user.id
                 }, { transaction: t });
@@ -165,24 +214,19 @@ const importData = async (req, res) => {
              break;
 
           case 'wholesale_sales':
-              if (row.engine_no && row.customer_code && row.sale_price_vnd) {
+              if (row.engine_no && row.customer_code && (row.sale_price_vnd || row.sale_price)) {
                   const vehicle = await Vehicle.findOne({ where: { engine_no: row.engine_no, status: 'In Stock' }, transaction: t });
-                  if (!vehicle) {
-                      results.failed++;
-                      results.errors.push(`Số máy ${row.engine_no} không tồn tại hoặc đã bán.`);
-                      break;
-                  }
-                  
+                  if (!vehicle) throw new Error(`Số máy ${row.engine_no} không tồn tại hoặc đã bán.`);
+
                   const customer = await WholesaleCustomer.findOne({ where: { customer_code: row.customer_code }, transaction: t });
-                  if (!customer) {
-                      results.failed++;
-                      results.errors.push(`Khách buôn mã ${row.customer_code} không tồn tại.`);
-                      break;
-                  }
+                  if (!customer) throw new Error(`Khách buôn mã ${row.customer_code} không tồn tại.`);
 
-                  const [vWarehouse] = await Warehouse.findOrCreate({ where: { warehouse_name: row.warehouse_name || 'Kho mặc định' }, transaction: t });
+                  const vWarehouse = await Warehouse.findOne({ where: { warehouse_name: row.warehouse_name || 'Kho mặc định' }, transaction: t });
+                  if (!vWarehouse) throw new Error(`Kho '${row.warehouse_name}' không tồn tại.`);
 
+                  const wsPrice = Number(row.sale_price_vnd || row.sale_price);
                   const saleDate = row.sale_date ? new Date(row.sale_date) : new Date();
+                  
                   const [wSale] = await WholesaleSale.findOrCreate({
                       where: {
                           customer_id: customer.id,
@@ -199,7 +243,7 @@ const importData = async (req, res) => {
                   });
 
                   await vehicle.update({ status: 'Sold', wholesale_sale_id: wSale.id }, { transaction: t });
-                  await wSale.increment('total_amount_vnd', { by: row.sale_price_vnd, transaction: t });
+                  await wSale.increment('total_amount_vnd', { by: wsPrice, transaction: t });
                   results.success++;
               }
               break;
@@ -209,24 +253,40 @@ const importData = async (req, res) => {
         }
       } catch (err) {
         results.failed++;
-        results.errors.push(`Dòng ${JSON.stringify(row)}: ${err.message}`);
+        results.errors.push(`Số máy/Tên: ${row.engine_no || row.name || 'N/A'} -> ${err.message}`);
       }
     }
 
     await t.commit();
+
+    // 🔔 SEND NOTIFICATION AFTER SUCCESSFUL IMPORT
+    if (results.success > 0) {
+        const typeLabels = {
+            'colors': 'danh mục màu',
+            'types': 'danh mục loại xe',
+            'purchases': 'lô hàng nhập',
+            'retail_sales': 'đơn bán lẻ',
+            'wholesale_sales': 'đơn bán buôn',
+            'suppliers': 'nhà cung cấp',
+            'customers': 'khách buôn'
+        };
+        await sendNotification(req, {
+            title: `📥 Import Excel: ${typeLabels[type] || type}`,
+            message: `Nhân viên ${req.user.full_name} đã nhập thành công ${results.success} bản ghi từ file Excel.`,
+            type: 'IMPORT_EXCEL',
+            link: '/dashboard'
+        });
+    }
+
     res.json({
       message: `Đã xử lý xong: ${results.success} thành công, ${results.failed} thất bại.`,
       results
     });
 
   } catch (error) {
-    await t.rollback();
+    if (t) await t.rollback();
     res.status(500).json({ message: 'Lỗi khi import file: ' + error.message });
   }
-};
-
-module.exports = {
-  importData
 };
 
 module.exports = {
