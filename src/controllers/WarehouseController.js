@@ -41,10 +41,15 @@ exports.delete = async (req, res) => {
       where: { id: id }
     });
     if (deleted) {
-      return res.status(204).send("Warehouse deleted");
+      return res.status(200).json({ message: "Đã xóa kho thành công" });
     }
-    throw new Error('Warehouse not found');
+    return res.status(404).json({ message: 'Không tìm thấy kho' });
   } catch (error) {
+    if (error.name === 'SequelizeForeignKeyConstraintError') {
+      return res.status(400).json({ 
+        message: 'Không thể xóa kho này vì đang có xe hoặc dữ liệu liên quan. Vui lòng kiểm tra lại!' 
+      });
+    }
     res.status(500).json({ message: error.message });
   }
 };

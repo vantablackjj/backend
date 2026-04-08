@@ -17,6 +17,7 @@ const { isAdmin, canManageDebt, canDelete, canManageMoney } = require('../middle
 router.get('/retail-sales', retailController.getAll);
 router.post('/retail-sales', retailController.create);
 router.delete('/retail-sales/:id', canDelete, retailController.delete);
+router.put('/retail-sales/:id/disbursement', canManageMoney, retailController.updateDisbursement);
 router.get('/retail-sales/:id/payments', retailPaymentController.getPaymentsBySale); // Get all payments for a sale
 router.post('/retail-payments', canManageMoney, retailPaymentController.addPayment); // Add a new payment
 router.delete('/retail-payments/:id', canManageMoney, retailPaymentController.deletePayment); // Delete a payment record
@@ -31,12 +32,18 @@ router.get('/purchases', purchaseController.getBySupplier);
 router.post('/purchases', purchaseController.createPurchase);
 router.get('/purchases/:id/details', purchaseController.getPurchaseDetails);
 router.post('/purchases/payment', canManageMoney, purchaseController.addPayment);
+router.delete('/purchases-payments/:id', canManageMoney, purchaseController.deletePayment);
+router.delete('/purchases/:id', canDelete, purchaseController.deleteLot);
+router.delete('/purchases/:purchase_id/vehicles/:vehicle_id', canDelete, purchaseController.deleteVehicleFromPurchase);
 
 // Wholesale Sales
 router.get('/wholesale-sales', wholesaleController.getByCustomer);
 router.post('/wholesale-sales', wholesaleController.createSale);
 router.get('/wholesale-sales/:id/details', wholesaleController.getSaleDetails);
 router.post('/wholesale-sales/payment', canManageMoney, wholesaleController.addPayment);
+router.delete('/wholesale-payments/:id', canManageMoney, wholesaleController.deletePayment);
+router.delete('/wholesale-sales/:id', canDelete, wholesaleController.deleteSale);
+router.delete('/wholesale-sales/:sale_id/vehicles/:vehicle_id', canDelete, wholesaleController.deleteVehicleFromSale);
 
 // Inventory
 router.get('/inventory/available', inventoryController.getAvailable);

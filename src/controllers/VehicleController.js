@@ -2,11 +2,12 @@ const Vehicle = require('../models/Vehicle');
 const VehicleType = require('../models/VehicleType');
 const VehicleColor = require('../models/VehicleColor');
 const Warehouse = require('../models/Warehouse');
+const RetailSale = require('../models/RetailSale');
 const { Op } = require('sequelize');
 
 exports.getAll = async (req, res) => {
   try {
-    const { status, warehouse_id, type_id, color_id, engine_no, chassis_no } = req.query;
+    const { status, warehouse_id, type_id, color_id, engine_no, chassis_no, search } = req.query;
     
     let where = {};
     
@@ -15,12 +16,18 @@ exports.getAll = async (req, res) => {
     if (type_id) where.type_id = type_id;
     if (color_id) where.color_id = color_id;
     
-    if (engine_no) {
-      where.engine_no = { [Op.iLike]: `%${engine_no}%` };
-    }
-    
-    if (chassis_no) {
-      where.chassis_no = { [Op.iLike]: `%${chassis_no}%` };
+    if (search) {
+      where[Op.or] = [
+        { engine_no: { [Op.iLike]: `%${search}%` } },
+        { chassis_no: { [Op.iLike]: `%${search}%` } }
+      ];
+    } else {
+      if (engine_no) {
+        where.engine_no = { [Op.iLike]: `%${engine_no}%` };
+      }
+      if (chassis_no) {
+        where.chassis_no = { [Op.iLike]: `%${chassis_no}%` };
+      }
     }
 
     // Role-based filtering: Non-admins only see vehicles in their warehouse
@@ -33,7 +40,8 @@ exports.getAll = async (req, res) => {
       include: [
         { model: VehicleType, attributes: ['name'] },
         { model: VehicleColor, attributes: ['color_name'] },
-        { model: Warehouse, attributes: ['warehouse_name'] }
+        { model: Warehouse, attributes: ['warehouse_name'] },
+        { model: RetailSale, attributes: ['customer_name', 'phone', 'address'] }
       ],
       order: [['createdAt', 'DESC']]
     });
@@ -50,7 +58,8 @@ exports.getById = async (req, res) => {
       include: [
         { model: VehicleType },
         { model: VehicleColor },
-        { model: Warehouse }
+        { model: Warehouse },
+        { model: RetailSale }
       ]
     });
     

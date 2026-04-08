@@ -28,8 +28,13 @@ exports.sendNotification = async (req, { title, message, type, warehouse_id, lin
         });
 
         if (io) {
-            // Emit to admins ONLY
+            // Emit to admins
             io.to("admins").emit('notification_new', fullNoti);
+            
+            // Emit to specific warehouse if specified
+            if (warehouse_id) {
+                io.to(`warehouse_${warehouse_id}`).emit('notification_new', fullNoti);
+            }
         }
         
         return fullNoti;

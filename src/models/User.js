@@ -46,6 +46,10 @@ const User = sequelize.define('User', {
   can_manage_spare_parts: {
     type: DataTypes.BOOLEAN,
     defaultValue: false
+  },
+  can_manage_master_data: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
   }
 }, {
   timestamps: true

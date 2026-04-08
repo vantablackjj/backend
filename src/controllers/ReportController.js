@@ -403,7 +403,11 @@ exports.getInventoryReport = async (req, res) => {
                 { model: VehicleType, attributes: ['name'] },
                 { model: VehicleColor, attributes: ['color_name'] },
                 { model: Warehouse, attributes: ['warehouse_name'] },
-                { model: Purchase, attributes: ['purchase_date'] }
+                { 
+                    model: Purchase, 
+                    attributes: ['purchase_date'],
+                    include: [{ model: Supplier, attributes: ['name'] }]
+                }
             ],
             order: [[Warehouse, 'warehouse_name', 'ASC'], ['createdAt', 'DESC']]
         });
@@ -523,7 +527,7 @@ exports.getRetailSalesReport = async (req, res) => {
         }
 
         if (has_debt === 'true') {
-            where[Op.and] = sequelize.literal('total_price > paid_amount');
+            where[Op.and] = sequelize.literal('total_price - paid_amount - (CASE WHEN is_disbursed = true THEN loan_amount ELSE 0 END) > 0');
         }
 
         if (req.user.role !== 'ADMIN') {
@@ -552,8 +556,8 @@ exports.getRetailSalesReport = async (req, res) => {
         const summary = {
             total_count: sales.length,
             total_revenue: sales.reduce((sum, s) => sum + Number(s.total_price || 0), 0),
-            total_collected: sales.reduce((sum, s) => sum + Number(s.paid_amount || 0), 0),
-            total_debt: sales.reduce((sum, s) => sum + (Number(s.total_price || 0) - Number(s.paid_amount || 0)), 0)
+            total_collected: sales.reduce((sum, s) => sum + Number(s.paid_amount || 0) + (s.is_disbursed ? Number(s.loan_amount || 0) : 0), 0),
+            total_debt: sales.reduce((sum, s) => sum + (Number(s.total_price || 0) - Number(s.paid_amount || 0) - (s.is_disbursed ? Number(s.loan_amount || 0) : 0)), 0)
         };
 
         res.json({ sales, summary });

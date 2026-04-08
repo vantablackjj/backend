@@ -7,9 +7,11 @@ exports.getAll = async (req, res) => {
   try {
     let where = {};
     
-    // Role-based filtering: ONLY ADMIN can see notifications
+    // Role-based filtering: 
+    // ADMIN sees all. 
+    // STAFF sees their warehouse notifications.
     if (req.user.role !== 'ADMIN') {
-        return res.json({ list: [], unreadCount: 0 });
+        where.warehouse_id = req.user.warehouse_id;
     }
 
     const { is_read } = req.query;

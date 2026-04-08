@@ -152,3 +152,31 @@ exports.delete = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 }
+
+exports.updateDisbursement = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { is_disbursed, disbursed_at } = req.body;
+
+        const sale = await RetailSale.findByPk(id);
+        if (!sale) return res.status(404).json({ message: 'Không tìm thấy hóa đơn!' });
+
+        if (req.user.role !== 'ADMIN' && sale.warehouse_id !== req.user.warehouse_id) {
+            return res.status(403).json({ message: 'Bạn không có quyền cập nhật hóa đơn của kho khác!' });
+        }
+
+        // BIÊN PHÁP BẢO VỆ: Nếu đã giải ngân, chỉ ADMIN mới được phép HỦY (Quay xe)
+        if (sale.is_disbursed && !is_disbursed && req.user.role !== 'ADMIN') {
+            return res.status(403).json({ message: 'Chỉ Admin mới có quyền hủy xác nhận giải ngân sau khi đã chốt!' });
+        }
+
+        await sale.update({
+            is_disbursed,
+            disbursed_at: is_disbursed ? (disbursed_at || new Date()) : null
+        });
+
+        res.json({ message: is_disbursed ? 'Đã xác nhận ngân hàng giải ngân thành công!' : 'Đã hủy xác nhận giải ngân!', sale });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};

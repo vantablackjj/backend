@@ -64,3 +64,11 @@ exports.canManageSpareParts = (req, res, next) => {
     return res.status(403).json({ message: 'Bạn không có quyền thực hiện hành động này! (Yêu cầu quyền Quản lý phụ tùng)' });
   }
 };
+// Middleware kiểm tra quyền QUẢN LÝ DANH MỤC (Admin hoặc Staff có quyền)
+exports.canManageMasterData = (req, res, next) => {
+  if (req.user && (req.user.role === 'ADMIN' || req.user.can_manage_master_data)) {
+    next();
+  } else {
+    return res.status(403).json({ message: 'Bạn không có quyền thực hiện hành động này! (Yêu cầu quyền Quản lý danh mục)' });
+  }
+};

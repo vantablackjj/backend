@@ -46,6 +46,10 @@ const Vehicle = sequelize.define('Vehicle', {
     type: DataTypes.UUID,
     allowNull: true
   },
+  wholesale_price_vnd: {
+    type: DataTypes.DECIMAL(15, 2),
+    allowNull: true
+  },
   price_vnd: {
     type: DataTypes.DECIMAL(15, 2),
     allowNull: true

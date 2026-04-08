@@ -28,6 +28,17 @@ const Notification = require('./models/Notification');
 const TransferPayment = require('./models/TransferPayment');
 const RetailPayment = require('./models/RetailPayment');
 
+// NEW Spare Parts & Maintenance Models
+const Part = require('./models/Part');
+const PartInventory = require('./models/PartInventory');
+const PartPurchase = require('./models/PartPurchase');
+const PartPurchaseItem = require('./models/PartPurchaseItem');
+const PartSale = require('./models/PartSale');
+const PartSaleItem = require('./models/PartSaleItem');
+const MaintenanceOrder = require('./models/MaintenanceOrder');
+const MaintenanceItem = require('./models/MaintenanceItem');
+const Mechanic = require('./models/Mechanic');
+
 // Associations
 // 1. Vehicle
 Vehicle.belongsTo(VehicleType, { foreignKey: 'type_id' });
@@ -82,6 +93,35 @@ Warehouse.hasMany(Expense, { foreignKey: 'warehouse_id' });
 
 Purchase.belongsTo(User, { as: 'creator', foreignKey: 'created_by' });
 Purchase.belongsTo(Warehouse, { foreignKey: 'warehouse_id' });
+
+// 8. Spare Parts & Maintenance Associations
+PartInventory.belongsTo(Part, { foreignKey: 'part_id' });
+PartInventory.belongsTo(Warehouse, { foreignKey: 'warehouse_id' });
+
+PartPurchase.belongsTo(Supplier, { foreignKey: 'supplier_id' });
+PartPurchase.belongsTo(Warehouse, { foreignKey: 'warehouse_id' });
+PartPurchase.belongsTo(User, { as: 'creator', foreignKey: 'created_by' });
+PartPurchase.hasMany(PartPurchaseItem, { foreignKey: 'purchase_id' });
+PartPurchaseItem.belongsTo(PartPurchase, { foreignKey: 'purchase_id' });
+PartPurchaseItem.belongsTo(Part, { foreignKey: 'part_id' });
+
+PartSale.belongsTo(WholesaleCustomer, { foreignKey: 'customer_id' });
+PartSale.belongsTo(Warehouse, { foreignKey: 'warehouse_id' });
+PartSale.belongsTo(User, { as: 'creator', foreignKey: 'created_by' });
+PartSale.hasMany(PartSaleItem, { foreignKey: 'sale_id' });
+PartSaleItem.belongsTo(PartSale, { foreignKey: 'sale_id' });
+PartSaleItem.belongsTo(Part, { foreignKey: 'part_id' });
+
+MaintenanceOrder.belongsTo(Vehicle, { foreignKey: 'vehicle_id' });
+MaintenanceOrder.belongsTo(Warehouse, { foreignKey: 'warehouse_id' });
+MaintenanceOrder.belongsTo(User, { as: 'creator', foreignKey: 'created_by' });
+MaintenanceOrder.belongsTo(Mechanic, { as: 'mechanic1', foreignKey: 'mechanic_1_id' });
+MaintenanceOrder.belongsTo(Mechanic, { as: 'mechanic2', foreignKey: 'mechanic_2_id' });
+MaintenanceOrder.hasMany(MaintenanceItem, { foreignKey: 'maintenance_order_id' });
+MaintenanceItem.belongsTo(MaintenanceOrder, { foreignKey: 'maintenance_order_id' });
+MaintenanceItem.belongsTo(Part, { foreignKey: 'part_id' });
+
+Mechanic.belongsTo(Warehouse, { foreignKey: 'warehouse_id' });
 
 
 const masterDataRoutes = require('./routes/masterData');
@@ -144,6 +184,7 @@ app.use('/api', verifyToken, businessRoutes);
 app.use('/api/reports', verifyToken, require('./routes/reportRoutes'));
 app.use('/api/notifications', verifyToken, require('./routes/notificationRoutes'));
 app.use('/api/dashboard', verifyToken, isAdmin, require('./routes/dashboardRoutes'));
+app.use('/api', verifyToken, require('./routes/partRoutes'));
 app.use('/api/import', verifyToken, require('./routes/importRoutes'));
 
 

@@ -24,6 +24,11 @@ exports.delete = async (req, res) => {
     await VehicleType.destroy({ where: { id } });
     res.json({ message: 'Đã xóa loại xe thành công' });
   } catch (error) {
+    if (error.name === 'SequelizeForeignKeyConstraintError') {
+      return res.status(400).json({ 
+        message: 'Không thể xóa loại xe này vì đang có xe trong kho thuộc loại này. Vui lòng kiểm tra lại!' 
+      });
+    }
     res.status(500).json({ message: error.message });
   }
 };

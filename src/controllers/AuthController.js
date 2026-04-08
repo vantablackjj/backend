@@ -4,7 +4,7 @@ const jwt = require('jsonwebtoken');
 
 exports.register = async (req, res) => {
   try {
-    const { username, password, role, warehouse_id, full_name, phone, can_manage_debt, can_delete, can_manage_money, can_manage_spare_parts } = req.body;
+    const { username, password, role, warehouse_id, full_name, phone, can_manage_debt, can_delete, can_manage_money, can_manage_spare_parts, can_manage_master_data } = req.body;
     
     // Kiểm tra xem đã tồn tại chưa
     const existing = await User.findOne({ where: { username } });
@@ -23,7 +23,8 @@ exports.register = async (req, res) => {
       can_manage_debt,
       can_delete,
       can_manage_money,
-      can_manage_spare_parts
+      can_manage_spare_parts,
+      can_manage_master_data
     });
 
     res.status(201).json({ message: 'Tạo tài khoản thành công!', user: { id: user.id, username: user.username, role: user.role } });
@@ -53,7 +54,8 @@ exports.login = async (req, res) => {
         can_manage_debt: user.can_manage_debt,
         can_delete: user.can_delete,
         can_manage_money: user.can_manage_money,
-        can_manage_spare_parts: user.can_manage_spare_parts
+        can_manage_spare_parts: user.can_manage_spare_parts,
+        can_manage_master_data: user.can_manage_master_data
       },
       process.env.JWT_SECRET,
       { expiresIn: '24h' }
@@ -70,7 +72,8 @@ exports.login = async (req, res) => {
         can_manage_debt: user.can_manage_debt,
         can_delete: user.can_delete,
         can_manage_money: user.can_manage_money,
-        can_manage_spare_parts: user.can_manage_spare_parts
+        can_manage_spare_parts: user.can_manage_spare_parts,
+        can_manage_master_data: user.can_manage_master_data
       }
     });
   } catch (error) {
@@ -102,12 +105,12 @@ exports.getAll = async (req, res) => {
 exports.update = async (req, res) => {
   try {
     const { id } = req.params;
-    const { username, password, role, warehouse_id, full_name, phone, can_manage_debt, can_delete, can_manage_money, can_manage_spare_parts } = req.body;
+    const { username, password, role, warehouse_id, full_name, phone, can_manage_debt, can_delete, can_manage_money, can_manage_spare_parts, can_manage_master_data } = req.body;
     
     const user = await User.findByPk(id);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    const updateData = { username, role, warehouse_id, full_name, phone, can_manage_debt, can_delete, can_manage_money, can_manage_spare_parts };
+    const updateData = { username, role, warehouse_id, full_name, phone, can_manage_debt, can_delete, can_manage_money, can_manage_spare_parts, can_manage_master_data };
     
     if (password) {
       updateData.password = await bcrypt.hash(password, 10);

@@ -51,6 +51,7 @@ exports.createSale = async (req, res) => {
       
       vehicle.status = 'Sold';
       vehicle.wholesale_sale_id = sale.id;
+      vehicle.wholesale_price_vnd = Number(item.price_vnd); // LƯU GIÁ BÁN TỪNG XE
       vehicle.notes = item.notes; // Ghi chú bán hàng
       await vehicle.save({ transaction });
     }
@@ -143,4 +144,103 @@ exports.addPayment = async (req, res) => {
     res.status(400).json({ message: error.message });
   }
 };
+
+exports.deleteSale = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { id } = req.params;
+
+        const sale = await WholesaleSale.findByPk(id, { transaction });
+        if (!sale) throw new Error('Không tìm thấy đơn bán buôn!');
+
+        if (req.user.role !== 'ADMIN' && sale.warehouse_id !== req.user.warehouse_id) {
+            throw new Error('Bạn không có quyền xóa đơn hàng của kho khác!');
+        }
+
+        // 1. Reset trạng thái xe về 'In Stock'
+        await Vehicle.update(
+            { status: 'In Stock', wholesale_sale_id: null },
+            { where: { wholesale_sale_id: id }, transaction }
+        );
+
+        // 2. Xóa các khoản thanh toán của đơn này
+        await WholesalePayment.destroy({ where: { wholesale_sale_id: id }, transaction });
+
+        // 3. Xóa đơn bán buôn
+        await sale.destroy({ transaction });
+
+        await transaction.commit();
+        res.json({ message: 'Đã xóa toàn bộ đơn bán buôn thành công!' });
+    } catch (error) {
+        if (transaction) await transaction.rollback();
+        res.status(500).json({ message: error.message });
+    }
+};
+
+exports.deleteVehicleFromSale = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { sale_id, vehicle_id } = req.params;
+        const { deduct_amount } = req.body;
+
+        const sale = await WholesaleSale.findByPk(sale_id, { transaction });
+        if (!sale) throw new Error('Không tìm thấy đơn bán buôn!');
+
+        const vehicle = await Vehicle.findOne({ where: { id: vehicle_id, wholesale_sale_id: sale_id }, transaction });
+        if (!vehicle) throw new Error('Không tìm thấy xe trong đơn này!');
+
+        // 1. Quyền xóa
+        if (req.user.role !== 'ADMIN' && sale.warehouse_id !== req.user.warehouse_id) {
+            throw new Error('Bạn không có quyền xóa xe của kho khác!');
+        }
+
+        // 2. Reset trạng thái xe
+        vehicle.status = 'In Stock';
+        vehicle.wholesale_sale_id = null;
+        await vehicle.save({ transaction });
+
+        // 3. Tự động trừ tiền: Ưu tiên dùng wholesale_price_vnd có sẵn của xe
+        const finalDeductAmount = (deduct_amount !== undefined) ? Number(deduct_amount) : Number(vehicle.wholesale_price_vnd || 0);
+
+        if (finalDeductAmount > 0) {
+            sale.total_amount_vnd = Math.max(0, Number(sale.total_amount_vnd || 0) - finalDeductAmount);
+            await sale.save({ transaction });
+        }
+
+        await transaction.commit();
+        res.json({ message: 'Đã xóa xe khỏi lô bán buôn thành công!' });
+    } catch (error) {
+        if (transaction) await transaction.rollback();
+        res.status(500).json({ message: error.message });
+    }
+};
+
+exports.deletePayment = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { id } = req.params;
+        const payment = await WholesalePayment.findByPk(id, { transaction });
+        if (!payment) throw new Error('Không tìm thấy khoản thanh toán!');
+
+        const sale = await WholesaleSale.findByPk(payment.wholesale_sale_id, { transaction });
+        if (!sale) throw new Error('Không tìm thấy đơn bán buôn liên quan!');
+
+        if (req.user.role !== 'ADMIN' && sale.warehouse_id !== req.user.warehouse_id) {
+            throw new Error('Bạn không có quyền xóa thanh toán của kho khác!');
+        }
+
+        // 1. Trừ tiền đã trả của đơn bán buôn
+        sale.paid_amount_vnd = Math.max(0, Number(sale.paid_amount_vnd || 0) - Number(payment.amount_paid_vnd));
+        await sale.save({ transaction });
+
+        // 2. Xóa khoản thanh toán
+        await payment.destroy({ transaction });
+
+        await transaction.commit();
+        res.json({ message: 'Đã xóa khoản thanh toán thành công!' });
+    } catch (error) {
+        if (transaction) await transaction.rollback();
+        res.status(500).json({ message: error.message });
+    }
+}
 

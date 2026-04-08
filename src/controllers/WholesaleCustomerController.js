@@ -18,6 +18,18 @@ exports.create = async (req, res) => {
   }
 };
 
+exports.update = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const data = await WholesaleCustomer.findByPk(id);
+    if (!data) return res.status(404).json({ message: 'Không tìm thấy khách buôn' });
+    await data.update(req.body);
+    res.json(data);
+  } catch (error) {
+    res.status(400).json({ message: error.message });
+  }
+};
+
 exports.delete = async (req, res) => {
   try {
     const { id } = req.params;

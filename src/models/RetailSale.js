@@ -98,6 +98,14 @@ const RetailSale = sequelize.define('RetailSale', {
   created_by: {
     type: DataTypes.UUID,
     allowNull: true
+  },
+  is_disbursed: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
+  },
+  disbursed_at: {
+    type: DataTypes.DATE,
+    allowNull: true
   }
 
 }, {
