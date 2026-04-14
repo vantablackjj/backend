@@ -11,21 +11,23 @@ const vehicleController = require('../controllers/VehicleController');
 const retailPaymentController = require('../controllers/RetailPaymentController');
 const Vehicle = require('../models/Vehicle');
 
-const { isAdmin, canManageDebt, canDelete, canManageMoney } = require('../middleware/authMiddleware');
+const { isAdmin, canManageDebt, canDelete, canManageMoney, canManageExpenses } = require('../middleware/authMiddleware');
 
 // Retail Sales
 router.get('/retail-sales', retailController.getAll);
+router.get('/search-sold-vehicles', retailController.searchVehicle);
 router.post('/retail-sales', retailController.create);
 router.delete('/retail-sales/:id', canDelete, retailController.delete);
 router.put('/retail-sales/:id/disbursement', canManageMoney, retailController.updateDisbursement);
+router.put('/retail-sales/:id/guarantee-book', retailController.updateGuaranteeBook);
 router.get('/retail-sales/:id/payments', retailPaymentController.getPaymentsBySale); // Get all payments for a sale
 router.post('/retail-payments', canManageMoney, retailPaymentController.addPayment); // Add a new payment
 router.delete('/retail-payments/:id', canManageMoney, retailPaymentController.deletePayment); // Delete a payment record
 
 // Expenses
-router.get('/expenses', isAdmin, expenseController.getAll);
-router.post('/expenses', isAdmin, expenseController.create);
-router.delete('/expenses/:id', isAdmin, expenseController.delete);
+router.get('/expenses', canManageExpenses, expenseController.getAll);
+router.post('/expenses', canManageExpenses, expenseController.create);
+router.delete('/expenses/:id', canManageExpenses, expenseController.delete);
 
 // Purchases
 router.get('/purchases', purchaseController.getBySupplier);
@@ -35,6 +37,8 @@ router.post('/purchases/payment', canManageMoney, purchaseController.addPayment)
 router.delete('/purchases-payments/:id', canManageMoney, purchaseController.deletePayment);
 router.delete('/purchases/:id', canDelete, purchaseController.deleteLot);
 router.delete('/purchases/:purchase_id/vehicles/:vehicle_id', canDelete, purchaseController.deleteVehicleFromPurchase);
+router.put('/purchases/:id/bulk-fix-codes', isAdmin, purchaseController.bulkFixCodes);
+router.put('/purchases/:id', purchaseController.updatePurchase);
 
 // Wholesale Sales
 router.get('/wholesale-sales', wholesaleController.getByCustomer);
@@ -86,10 +90,14 @@ router.get('/vehicles-in-warehouse/:warehouse_id', async (req, res) => {
             where: { 
                 warehouse_id,
                 [Op.or]: [
-                    { status: 'In Stock' },
-                    { id: selectedIds }
+                    { status: 'In Stock', is_locked: false },
+                    { id: selectedIds } // Giữ lại những xe thuộc phiếu đang sửa để không bị mất dòng
                 ]
-            }
+            },
+            include: [
+                { model: require('../models/VehicleType'), as: 'VehicleType' },
+                { model: require('../models/VehicleColor'), as: 'VehicleColor' }
+            ]
         });
 
         res.json(list);

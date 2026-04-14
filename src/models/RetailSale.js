@@ -28,8 +28,12 @@ const RetailSale = sequelize.define('RetailSale', {
     allowNull: true
   },
   gender: {
-    type: DataTypes.ENUM('Trai', 'Gái'),
-    defaultValue: 'Trai'
+    type: DataTypes.ENUM('Nam', 'Nữ'),
+    defaultValue: 'Nam'
+  },
+  birthday: {
+    type: DataTypes.DATEONLY,
+    allowNull: true
   },
   engine_no: {
     type: DataTypes.STRING,
@@ -80,7 +84,7 @@ const RetailSale = sequelize.define('RetailSale', {
     allowNull: true
   },
   payment_method: {
-    type: DataTypes.ENUM('Trả thẳng', 'Trả góp'),
+    type: DataTypes.ENUM('Trả thẳng', 'Trả góp', 'Trúng thưởng/Công nợ', 'Trả gộp', 'Chuyển khoản'),
     defaultValue: 'Trả thẳng'
   },
   bank_name: {
@@ -106,6 +110,19 @@ const RetailSale = sequelize.define('RetailSale', {
   disbursed_at: {
     type: DataTypes.DATE,
     allowNull: true
+  },
+  guarantee_book_issued: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
+  },
+  guarantee_book_issued_at: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
+  gifts: {
+    type: DataTypes.JSON,
+    allowNull: true,
+    defaultValue: []
   }
 
 }, {

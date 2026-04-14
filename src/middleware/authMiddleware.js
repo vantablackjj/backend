@@ -72,3 +72,12 @@ exports.canManageMasterData = (req, res, next) => {
     return res.status(403).json({ message: 'Bạn không có quyền thực hiện hành động này! (Yêu cầu quyền Quản lý danh mục)' });
   }
 };
+
+// Middleware kiểm tra quyền QUẢN LÝ CHI TIÊU (Admin hoặc Staff có quyền)
+exports.canManageExpenses = (req, res, next) => {
+  if (req.user && (req.user.role === 'ADMIN' || req.user.can_manage_expenses)) {
+    next();
+  } else {
+    return res.status(403).json({ message: 'Bạn không có quyền thực hiện hành động này! (Yêu cầu quyền Quản lý chi tiêu)' });
+  }
+};

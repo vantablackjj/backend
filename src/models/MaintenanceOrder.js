@@ -89,6 +89,14 @@ const MaintenanceOrder = sequelize.define('MaintenanceOrder', {
   warehouse_id: {
     type: DataTypes.UUID,
     allowNull: true
+  },
+  lift_table_id: {
+    type: DataTypes.UUID,
+    allowNull: true
+  },
+  status: {
+    type: DataTypes.ENUM('PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'),
+    defaultValue: 'PENDING'
   }
 }, {
   timestamps: true

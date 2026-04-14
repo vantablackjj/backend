@@ -7,6 +7,7 @@ const supplierController = require('../controllers/SupplierController');
 const customerController = require('../controllers/WholesaleCustomerController');
 const warehouseController = require('../controllers/WarehouseController');
 const mechanicController = require('../controllers/MechanicController');
+const liftTableController = require('../controllers/LiftTableController');
 
 
 const { isAdmin, canManageMasterData } = require('../middleware/authMiddleware');
@@ -46,5 +47,11 @@ router.get('/mechanics', mechanicController.getAll);
 router.post('/mechanics', isAdmin, mechanicController.create);
 router.put('/mechanics/:id', isAdmin, mechanicController.update);
 router.delete('/mechanics/:id', isAdmin, mechanicController.delete);
+
+// Lift Tables
+router.get('/lift-tables', liftTableController.getLiftTables);
+router.post('/lift-tables', isAdmin, liftTableController.createLiftTable);
+router.put('/lift-tables/:id', isAdmin, liftTableController.updateLiftTable);
+router.delete('/lift-tables/:id', isAdmin, liftTableController.deleteLiftTable);
 
 module.exports = router;

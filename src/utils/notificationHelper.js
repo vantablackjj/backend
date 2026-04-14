@@ -28,11 +28,13 @@ exports.sendNotification = async (req, { title, message, type, warehouse_id, lin
         });
 
         if (io) {
+            console.log(`[Socket.io] Emitting NOTI_NEW to admins. Title: ${title}`);
             // Emit to admins
             io.to("admins").emit('notification_new', fullNoti);
             
             // Emit to specific warehouse if specified
             if (warehouse_id) {
+                console.log(`[Socket.io] Emitting NOTI_NEW to warehouse_${warehouse_id}`);
                 io.to(`warehouse_${warehouse_id}`).emit('notification_new', fullNoti);
             }
         }

@@ -17,6 +17,7 @@ const { Op } = require('sequelize');
 const getParts = async (req, res) => {
   try {
     const parts = await Part.findAll({
+      include: [{ model: Part, as: 'LinkedPart', attributes: ['code', 'name', 'unit'] }],
       order: [['code', 'ASC']]
     });
     res.json(parts);
@@ -94,9 +95,12 @@ const createPartPurchase = async (req, res) => {
       }, { transaction: t });
 
       // Update Inventory
+      const vPart = await Part.findByPk(item.part_id, { transaction: t });
+      const inventoryPartId = vPart.linked_part_id || vPart.id;
+
       const [inventory, created] = await PartInventory.findOrCreate({
-        where: { part_id: item.part_id, warehouse_id },
-        defaults: { part_id: item.part_id, warehouse_id, quantity: 0 },
+        where: { part_id: inventoryPartId, warehouse_id },
+        defaults: { part_id: inventoryPartId, warehouse_id, quantity: 0 },
         transaction: t
       });
 
@@ -127,7 +131,7 @@ const createMaintenanceOrder = async (req, res) => {
         maintenance_date, license_plate, engine_no, chassis_no, model_name, km_reading,
         customer_name, customer_phone, customer_address,
         mechanic_1_id, mechanic_2_id, service_type, notes,
-        items, vat_percent, paid_amount, warehouse_id
+        items, vat_percent, paid_amount, warehouse_id, lift_table_id, status
     } = req.body;
 
     // Check if vehicle exists in system
@@ -155,8 +159,15 @@ const createMaintenanceOrder = async (req, res) => {
         customer_name, customer_phone, customer_address,
         mechanic_1_id, mechanic_2_id, service_type, notes,
         vat_percent, paid_amount, warehouse_id,
+        lift_table_id, status: status || 'IN_PROGRESS',
         created_by: req.user.id
     }, { transaction: t });
+
+    // Auto-update Lift Table to BUSY
+    if (lift_table_id) {
+        const LiftTable = require('../models/LiftTable');
+        await LiftTable.update({ status: 'BUSY' }, { where: { id: lift_table_id }, transaction: t });
+    }
 
     let total_amount = 0;
     for (const item of items) {
@@ -176,14 +187,19 @@ const createMaintenanceOrder = async (req, res) => {
 
         // If it's a part, decrease inventory
         if (item.type === 'PART') {
+            const vPart = await Part.findByPk(item.part_id, { transaction: t });
+            const inventoryPartId = vPart.linked_part_id || vPart.id;
+            const conversion = vPart.default_conversion_rate || 1;
+            const baseQty = Number(item.quantity) * conversion;
+
             const inventory = await PartInventory.findOne({
-                where: { part_id: item.part_id, warehouse_id },
+                where: { part_id: inventoryPartId, warehouse_id },
                 transaction: t
             });
-            if (!inventory || inventory.quantity < item.quantity) {
+            if (!inventory || inventory.quantity < baseQty) {
                 throw new Error(`Phụ tùng ${item.description || item.part_id} không đủ tồn kho tại kho này!`);
             }
-            await inventory.decrement('quantity', { by: item.quantity, transaction: t });
+            await inventory.decrement('quantity', { by: baseQty, transaction: t });
         }
     }
 
@@ -257,16 +273,21 @@ const createPartSale = async (req, res) => {
       }, { transaction: t });
 
       // Update Inventory
+      const vPart = await Part.findByPk(item.part_id, { transaction: t });
+      const inventoryPartId = vPart.linked_part_id || vPart.id;
+      const conversion = vPart.default_conversion_rate || 1;
+      const baseQty = Number(item.quantity) * conversion;
+
       const inventory = await PartInventory.findOne({
-        where: { part_id: item.part_id, warehouse_id },
+        where: { part_id: inventoryPartId, warehouse_id },
         transaction: t
       });
 
-      if (!inventory || inventory.quantity < item.quantity) {
-        throw new Error(`Phụ tùng mã ${item.part_id} không đủ tồn kho!`);
+      if (!inventory || inventory.quantity < baseQty) {
+        throw new Error(`Phụ tùng mã ${vPart.code} không đủ tồn kho!`);
       }
 
-      await inventory.decrement('quantity', { by: item.quantity, transaction: t });
+      await inventory.decrement('quantity', { by: baseQty, transaction: t });
     }
 
     const final_total = total_amount * (1 + (vat_percent || 0) / 100);
@@ -356,6 +377,115 @@ const updateMaintenanceOrderPayment = async (req, res) => {
     }
 };
 
+const updateMaintenanceOrder = async (req, res) => {
+    const t = await sequelize.transaction();
+    try {
+        const { id } = req.params;
+        const { 
+            maintenance_date, license_plate, engine_no, chassis_no, model_name, km_reading,
+            customer_name, customer_phone, customer_address,
+            mechanic_1_id, mechanic_2_id, service_type, notes,
+            items, vat_percent, paid_amount, warehouse_id, lift_table_id, status
+        } = req.body;
+
+        const order = await MaintenanceOrder.findByPk(id, { include: [MaintenanceItem] });
+        if (!order) throw new Error('Không tìm thấy phiếu bảo trì');
+
+        // Rollback inventory for existing PART items
+        for (const oldItem of order.MaintenanceItems) {
+            if (oldItem.type === 'PART' && oldItem.part_id) {
+                const vPart = await Part.findByPk(oldItem.part_id, { transaction: t });
+                const inventoryPartId = vPart.linked_part_id || vPart.id;
+                const conversion = vPart.default_conversion_rate || 1;
+                const baseQty = Number(oldItem.quantity) * conversion;
+
+                const inventory = await PartInventory.findOne({
+                    where: { part_id: inventoryPartId, warehouse_id: order.warehouse_id },
+                    transaction: t
+                });
+                if (inventory) {
+                    await inventory.increment('quantity', { by: baseQty, transaction: t });
+                }
+            }
+        }
+
+        // Delete old items
+        await MaintenanceItem.destroy({ where: { maintenance_order_id: id }, transaction: t });
+
+        const oldLiftId = order.lift_table_id;
+        const oldStatus = order.status;
+
+        // Update Order info
+        await order.update({
+            maintenance_date, license_plate, engine_no, chassis_no, model_name, km_reading,
+            customer_name, customer_phone, customer_address,
+            mechanic_1_id, mechanic_2_id, service_type, notes,
+            vat_percent, paid_amount, warehouse_id, lift_table_id, status
+        }, { transaction: t });
+
+        // Auto-update Lift Table Statuses
+        const LiftTable = require('../models/LiftTable');
+        
+        // 1. If lift changed
+        if (oldLiftId && oldLiftId !== lift_table_id) {
+            await LiftTable.update({ status: 'AVAILABLE' }, { where: { id: oldLiftId }, transaction: t });
+        }
+        
+        // 2. Update current lift based on order status
+        if (lift_table_id) {
+            if (['COMPLETED', 'CANCELLED'].includes(status)) {
+                await LiftTable.update({ status: 'AVAILABLE' }, { where: { id: lift_table_id }, transaction: t });
+            } else {
+                await LiftTable.update({ status: 'BUSY' }, { where: { id: lift_table_id }, transaction: t });
+            }
+        }
+
+        // Create new items and deduct inventory
+        let total_amount = 0;
+        for (const item of items) {
+            const item_total = Number(item.quantity) * Number(item.unit_price);
+            total_amount += item_total;
+
+            await MaintenanceItem.create({
+                maintenance_order_id: order.id,
+                type: item.type,
+                part_id: item.type === 'PART' ? item.part_id : null,
+                description: item.description,
+                quantity: item.quantity,
+                unit: item.unit,
+                unit_price: item.unit_price,
+                total_price: item_total
+            }, { transaction: t });
+
+            if (item.type === 'PART') {
+                const vPart = await Part.findByPk(item.part_id, { transaction: t });
+                const inventoryPartId = vPart.linked_part_id || vPart.id;
+                const conversion = vPart.default_conversion_rate || 1;
+                const baseQty = Number(item.quantity) * conversion;
+
+                const inventory = await PartInventory.findOne({
+                    where: { part_id: inventoryPartId, warehouse_id },
+                    transaction: t
+                });
+                if (!inventory || inventory.quantity < baseQty) {
+                    throw new Error(`Phụ tùng ${item.description || item.part_id} không đủ tồn kho tại kho này!`);
+                }
+                await inventory.decrement('quantity', { by: baseQty, transaction: t });
+            }
+        }
+
+        const final_total = total_amount * (1 + (vat_percent || 0) / 100);
+        await order.update({ total_amount: final_total }, { transaction: t });
+
+        await t.commit();
+        res.json(order);
+    } catch (error) {
+        if (t) await t.rollback();
+        res.status(400).json({ message: error.message });
+    }
+};
+
+
 const getMaintenanceOrders = async (req, res) => {
     try {
         const { search } = req.query;
@@ -390,5 +520,6 @@ module.exports = {
   createPartPurchase, createMaintenanceOrder,
   getPartInventory, createPartSale, getMaintenanceOrders,
   getPartPurchases, getPartSales, 
-  updatePartPurchasePayment, updatePartSalePayment, updateMaintenanceOrderPayment
+  updatePartPurchasePayment, updatePartSalePayment, updateMaintenanceOrderPayment,
+  updateMaintenanceOrder
 };

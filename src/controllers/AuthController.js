@@ -4,7 +4,12 @@ const jwt = require('jsonwebtoken');
 
 exports.register = async (req, res) => {
   try {
-    const { username, password, role, warehouse_id, full_name, phone, can_manage_debt, can_delete, can_manage_money, can_manage_spare_parts, can_manage_master_data } = req.body;
+    const { 
+      username, password, role, warehouse_id, full_name, phone, 
+      can_manage_debt, can_delete, can_manage_money, can_manage_spare_parts, 
+      can_manage_master_data, can_manage_sales,
+      can_manage_expenses, expense_warehouses
+    } = req.body;
     
     // Kiểm tra xem đã tồn tại chưa
     const existing = await User.findOne({ where: { username } });
@@ -24,7 +29,10 @@ exports.register = async (req, res) => {
       can_delete,
       can_manage_money,
       can_manage_spare_parts,
-      can_manage_master_data
+      can_manage_master_data,
+      can_manage_sales,
+      can_manage_expenses,
+      expense_warehouses
     });
 
     res.status(201).json({ message: 'Tạo tài khoản thành công!', user: { id: user.id, username: user.username, role: user.role } });
@@ -55,7 +63,10 @@ exports.login = async (req, res) => {
         can_delete: user.can_delete,
         can_manage_money: user.can_manage_money,
         can_manage_spare_parts: user.can_manage_spare_parts,
-        can_manage_master_data: user.can_manage_master_data
+        can_manage_master_data: user.can_manage_master_data,
+        can_manage_sales: user.can_manage_sales,
+        can_manage_expenses: user.can_manage_expenses,
+        expense_warehouses: user.expense_warehouses
       },
       process.env.JWT_SECRET,
       { expiresIn: '24h' }
@@ -73,7 +84,10 @@ exports.login = async (req, res) => {
         can_delete: user.can_delete,
         can_manage_money: user.can_manage_money,
         can_manage_spare_parts: user.can_manage_spare_parts,
-        can_manage_master_data: user.can_manage_master_data
+        can_manage_master_data: user.can_manage_master_data,
+        can_manage_sales: user.can_manage_sales,
+        can_manage_expenses: user.can_manage_expenses,
+        expense_warehouses: user.expense_warehouses
       }
     });
   } catch (error) {
@@ -105,15 +119,34 @@ exports.getAll = async (req, res) => {
 exports.update = async (req, res) => {
   try {
     const { id } = req.params;
-    const { username, password, role, warehouse_id, full_name, phone, can_manage_debt, can_delete, can_manage_money, can_manage_spare_parts, can_manage_master_data } = req.body;
+    const { 
+      username, password, role, warehouse_id, full_name, phone, 
+      can_manage_debt, can_delete, can_manage_money, can_manage_spare_parts, 
+      can_manage_master_data, can_manage_sales,
+      can_manage_expenses, expense_warehouses
+    } = req.body;
     
     const user = await User.findByPk(id);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    const updateData = { username, role, warehouse_id, full_name, phone, can_manage_debt, can_delete, can_manage_money, can_manage_spare_parts, can_manage_master_data };
+    const updateData = { 
+      username, role, warehouse_id, full_name, phone, 
+      can_manage_debt, can_delete, can_manage_money, can_manage_spare_parts, 
+      can_manage_master_data, can_manage_sales,
+      can_manage_expenses, expense_warehouses
+    };
     
     if (password) {
       updateData.password = await bcrypt.hash(password, 10);
+    }
+
+    // Kiểm tra nếu đổi username thì phải không trùng với người khác
+    if (username && username !== user.username) {
+        if (user.username === 'admin') {
+            return res.status(403).json({ message: 'Không thể đổi tên đăng nhập của tài khoản Admin hệ thống!' });
+        }
+        const existing = await User.findOne({ where: { username } });
+        if (existing) return res.status(400).json({ message: 'Tên đăng nhập mới đã tồn tại!' });
     }
 
     await user.update(updateData);
@@ -127,9 +160,16 @@ exports.update = async (req, res) => {
 exports.delete = async (req, res) => {
   try {
     const { id } = req.params;
-    const deleted = await User.destroy({ where: { id } });
-    if (deleted) return res.status(200).json({ message: 'Đã xóa nhân viên' });
-    res.status(404).json({ message: 'User not found' });
+    const user = await User.findByPk(id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    // Ngăn chặn xóa tài khoản admin chính
+    if (user.username === 'admin') {
+      return res.status(403).json({ message: 'Không thể xóa tài khoản Admin hệ thống!' });
+    }
+
+    await user.destroy();
+    res.status(200).json({ message: 'Đã xóa nhân viên' });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

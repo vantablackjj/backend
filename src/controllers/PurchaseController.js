@@ -2,6 +2,7 @@ const Purchase = require('../models/Purchase');
 const Vehicle = require('../models/Vehicle');
 const PurchasePayment = require('../models/PurchasePayment');
 const sequelize = require('../config/database');
+const { Op } = require('sequelize');
 
 exports.createPurchase = async (req, res) => {
   const transaction = await sequelize.transaction();
@@ -18,6 +19,18 @@ exports.createPurchase = async (req, res) => {
       if (!item.engine_no || !item.chassis_no || !item.type_id || !item.color_id || !item.price_vnd) {
           throw new Error(`Xe ${item.engine_no || 'chưa rõ Số máy'} đang thiếu thông tin quan trọng. Vui lòng kiểm tra lại tất cả các trường!`);
       }
+      
+      // KIỂM TRA TRÙNG LẶP SỐ MÁY/SỐ KHUNG TRONG HỆ THỐNG
+      const existing = await Vehicle.findOne({ 
+        where: { 
+          [Op.or]: [{ engine_no: item.engine_no }, { chassis_no: item.chassis_no }] 
+        }, 
+        transaction 
+      });
+      if (existing) {
+          throw new Error(`Số máy ${item.engine_no} hoặc Số khung ${item.chassis_no} đã tồn tại trong hệ thống (Tình trạng: ${existing.status}). Không thể nhập trùng!`);
+      }
+
       if (Number(item.price_vnd) <= 0) throw new Error('Giá nhập hàng của xe phải lớn hơn 0!');
       totalVal += Number(item.price_vnd);
     }
@@ -90,9 +103,26 @@ exports.getBySupplier = (req, res) => {
 exports.getPurchaseDetails = async (req, res) => {
   try {
     const { id } = req.params;
-    const vehicles = await Vehicle.findAll({ where: { purchase_id: id } });
+    const vehicles = await Vehicle.findAll({ 
+      where: { purchase_id: id },
+      include: [
+        { model: require('../models/VehicleType'), as: 'VehicleType' },
+        { model: require('../models/VehicleColor'), as: 'VehicleColor' }
+      ]
+    });
     const payments = await PurchasePayment.findAll({ where: { purchase_id: id } });
     res.json({ vehicles, payments });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+exports.updatePurchase = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { purchase_date, notes } = req.body;
+    await Purchase.update({ purchase_date, notes }, { where: { id } });
+    res.json({ message: 'Cập nhật lô hàng thành công!' });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -319,5 +349,61 @@ exports.deletePayment = async (req, res) => {
     } catch (error) {
         if (transaction) await transaction.rollback();
         res.status(500).json({ message: error.message });
+    }
+}
+
+exports.bulkFixCodes = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { id } = req.params;
+        const vehicles = await Vehicle.findAll({ 
+            where: { purchase_id: id, status: 'In Stock' },
+            transaction
+        });
+
+        const VehicleType = require('../models/VehicleType');
+        let fixedCount = 0;
+
+        for (const vehicle of vehicles) {
+            const vType = await VehicleType.findByPk(vehicle.type_id, { transaction });
+            if (!vType) continue;
+
+            let updated = false;
+            let newEngine = vehicle.engine_no;
+            let newChassis = vehicle.chassis_no;
+
+            if (vType.engine_prefix && !newEngine.startsWith(vType.engine_prefix)) {
+                newEngine = vType.engine_prefix + newEngine;
+                updated = true;
+            }
+            if (vType.chassis_prefix && !newChassis.startsWith(vType.chassis_prefix)) {
+                newChassis = vType.chassis_prefix + newChassis;
+                updated = true;
+            }
+
+            if (updated) {
+                // Check uniqueness before saving
+                const existing = await Vehicle.findOne({ 
+                    where: { 
+                        engine_no: newEngine, 
+                        id: { [Op.ne]: vehicle.id } 
+                    }, 
+                    transaction 
+                });
+                if (existing) throw new Error(`Không thể sửa Số máy ${vehicle.engine_no} -> ${newEngine} vì mã mới đã tồn tại trên hệ thống.`);
+
+                await vehicle.update({ 
+                    engine_no: newEngine, 
+                    chassis_no: newChassis 
+                }, { transaction });
+                fixedCount++;
+            }
+        }
+
+        await transaction.commit();
+        res.json({ message: `Đã tự động sửa xong ${fixedCount} xe trong lô này.` });
+    } catch (error) {
+        if (transaction) await transaction.rollback();
+        res.status(400).json({ message: error.message });
     }
 }

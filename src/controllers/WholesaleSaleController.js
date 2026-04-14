@@ -1,6 +1,8 @@
 const WholesaleSale = require('../models/WholesaleSale');
 const WholesalePayment = require('../models/WholesalePayment');
 const Vehicle = require('../models/Vehicle');
+const VehicleType = require('../models/VehicleType');
+const VehicleColor = require('../models/VehicleColor');
 const sequelize = require('../config/database');
 
 exports.createSale = async (req, res) => {
@@ -94,6 +96,10 @@ exports.getByCustomer = async (req, res) => {
 
     const sales = await WholesaleSale.findAll({
       where,
+      include: [
+        { model: require('../models/WholesaleCustomer') },
+        { model: require('../models/Warehouse') }
+      ],
       order: [['sale_date', 'DESC']]
     });
 
@@ -106,7 +112,13 @@ exports.getByCustomer = async (req, res) => {
 exports.getSaleDetails = async (req, res) => {
   try {
     const { id } = req.params;
-    const vehicles = await Vehicle.findAll({ where: { wholesale_sale_id: id } });
+    const vehicles = await Vehicle.findAll({ 
+      where: { wholesale_sale_id: id },
+      include: [
+        { model: VehicleType, attributes: ['name'] },
+        { model: VehicleColor, attributes: ['color_name'] }
+      ]
+    });
     const payments = await WholesalePayment.findAll({ where: { wholesale_sale_id: id } });
     res.json({ vehicles, payments });
   } catch (error) {

@@ -15,5 +15,10 @@ router.get('/retail-sales-report', reportController.getRetailSalesReport);
 router.get('/warranty-report', reportController.getWarrantyReport);
 router.get('/daily', reportController.getDailyReport);
 
+// SPARE PARTS REPORTS
+router.get('/parts/inventory', reportController.getPartInventoryReport);
+router.get('/parts/purchases', reportController.getPartPurchasesReport);
+router.get('/parts/sales', reportController.getPartSalesReport);
+
 
 module.exports = router;

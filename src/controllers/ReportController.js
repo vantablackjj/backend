@@ -15,9 +15,20 @@ const RetailPayment = require('../models/RetailPayment');
 const PurchasePayment = require('../models/PurchasePayment');
 const TransferPayment = require('../models/TransferPayment');
 const Expense = require('../models/Expense');
+const Part = require('../models/Part');
+const PartInventory = require('../models/PartInventory');
+const PartPurchase = require('../models/PartPurchase');
+const PartPurchaseItem = require('../models/PartPurchaseItem');
+const PartSale = require('../models/PartSale');
+const PartSaleItem = require('../models/PartSaleItem');
 const sequelize = require('../config/database');
 const { Op } = require('sequelize');
 const dayjs = require('dayjs');
+const utc = require('dayjs/plugin/utc');
+const timezone = require('dayjs/plugin/timezone');
+dayjs.extend(utc);
+dayjs.extend(timezone);
+dayjs.tz.setDefault('Asia/Ho_Chi_Minh');
 
 exports.getVehicleLifecycle = async (req, res) => {
     try {
@@ -120,7 +131,7 @@ exports.getVehicleLifecycle = async (req, res) => {
                     type: 'SALE_WHOLESALE',
                     title: 'XUẤT BÁN SỈ',
                     message: `Xuất lô hàng cho đối tác: ${sale.WholesaleCustomer?.name || 'N/A'}`,
-                    price: sale.total_amount_vnd,
+                    price: vehicle.wholesale_price_vnd || sale.total_amount_vnd,
                     notes: sale.notes
                 });
             }
@@ -149,14 +160,18 @@ exports.getVehicleLookup = async (req, res) => {
             created_by,
             engine_no,
             chassis_no,
-            sale_channel // 'RETAIL' or 'WHOLESALE'
+            sale_channel, // 'RETAIL' or 'WHOLESALE'
+            supplier_id,
+            status // 'In Stock', 'Sold', etc.
         } = req.query;
 
         let where = {};
+        if (status) where.status = status;
         
         let includes = [
             { model: VehicleType, attributes: ['name'] },
-            { model: VehicleColor, attributes: ['color_name'] }
+            { model: VehicleColor, attributes: ['color_name'] },
+            { model: Warehouse, attributes: ['warehouse_name'] }
         ];
 
         let purchaseInclude = { 
@@ -205,7 +220,13 @@ exports.getVehicleLookup = async (req, res) => {
                 // By Date and Importer
                 let purchaseWhere = {};
                 if (from_date && to_date) {
-                    purchaseWhere.purchase_date = { [Op.between]: [from_date, to_date] };
+                    const endFull = to_date + ' 23:59:59';
+                    if (mode === 'IMPORT' && type === 'DATE_IMPORTER') {
+                        // Ngày nhập hàng nằm ở bảng Purchase (purchase_date), sẽ lọc kèm ở dưới
+                    } else if (mode === 'SALE' && type === 'SALE_DATE') {
+                        // Sẽ lọc ở bên dưới khi xử lý filteredVehicles
+                    }
+                    purchaseWhere.purchase_date = { [Op.between]: [from_date, endFull] };
                 }
                 if (created_by) {
                     purchaseWhere.created_by = created_by;
@@ -226,23 +247,49 @@ exports.getVehicleLookup = async (req, res) => {
             } else {
                 // IMPORT_DATE_IMPORTER criteria but for SOLD vehicles
                 let purchaseWhere = {};
-                if (from_date && to_date) purchaseWhere.purchase_date = { [Op.between]: [from_date, to_date] };
+                if (from_date && to_date) {
+                    const endFull = to_date + ' 23:59:59';
+                    purchaseWhere.purchase_date = { [Op.between]: [from_date, endFull] };
+                }
                 if (created_by) purchaseWhere.created_by = created_by;
                 purchaseInclude.where = purchaseWhere;
                 purchaseInclude.required = true;
             }
         }
 
+        // ADD SUPPLIER FILTER
+        if (supplier_id) {
+            purchaseInclude.where = { ...purchaseInclude.where, supplier_id };
+            purchaseInclude.required = true;
+        }
+
         // ADD CUSTOMER NAME FILTER (RETAIL & WHOLESALE)
-        const { customer_name } = req.query;
-        if (customer_name) {
-            retailInclude.where = { customer_name: { [Op.iLike]: `%${customer_name}%` } };
-            wholesaleInclude.include = [{ 
-                model: WholesaleCustomer, 
-                where: { name: { [Op.iLike]: `%${customer_name}%` } },
-                attributes: ['name', 'address'] 
-            }];
-            // We'll use JS filtering for the "OR" logic between retail and wholesale below
+        const customer_name_param = req.query.customer_name || req.query['customer_name[]'];
+        
+        if (customer_name_param) {
+            const names = Array.isArray(customer_name_param) ? customer_name_param : [customer_name_param];
+            const cleanNames = names.filter(n => n && n.trim() !== '');
+
+            if (cleanNames.length > 0) {
+                const subOr = [];
+                cleanNames.forEach(name => {
+                    // Chỉ lọc ở bảng Bán lẻ nếu bảng này có trong danh sách include
+                    if (includes.some(inc => inc.model === RetailSale)) {
+                        subOr.push({ '$RetailSale.customer_name$': { [Op.iLike]: `%${name}%` } });
+                    }
+                    // Chỉ lọc ở bảng Bán buôn nếu bảng này có trong danh sách include
+                    if (includes.some(inc => inc.model === WholesaleSale)) {
+                        subOr.push({ '$WholesaleSale.WholesaleCustomer.name$': { [Op.iLike]: `%${name}%` } });
+                    }
+                });
+
+                if (subOr.length > 0) {
+                    where[Op.or] = subOr;
+                    // Đảm bảo không bị mất xe do INNER JOIN
+                    if (retailInclude) retailInclude.required = false;
+                    if (wholesaleInclude) wholesaleInclude.required = false;
+                }
+            }
         }
 
         const vehicles = await Vehicle.findAll({
@@ -253,29 +300,37 @@ exports.getVehicleLookup = async (req, res) => {
                 : [[Purchase, 'purchase_date', 'DESC']]
         });
 
-        // Post-process for "SALE_DATE" or "CUSTOMER_NAME"
+        // HẬU KIỂM (Post-process) ĐỂ ĐẢM BẢO CHÍNH XÁC TUYỆT ĐỐI
         let filteredVehicles = vehicles;
-        if (customer_name || (mode === 'SALE' && type === 'SALE_DATE' && from_date && to_date)) {
-            filteredVehicles = vehicles.filter(v => {
-                // 1. Filter by Name if provided
-                if (customer_name) {
-                    const rName = v.RetailSale?.customer_name || '';
-                    const wName = v.WholesaleSale?.WholesaleCustomer?.name || '';
-                    if (!rName.toLowerCase().includes(customer_name.toLowerCase()) && 
-                        !wName.toLowerCase().includes(customer_name.toLowerCase())) {
-                        return false;
-                    }
-                }
+        if (customer_name_param || (mode === 'SALE' && type === 'SALE_DATE' && from_date && to_date)) {
+            const endFull = to_date + ' 23:59:59';
+            const names = customer_name_param ? (Array.isArray(customer_name_param) ? customer_name_param : [customer_name_param]) : [];
+            const cleanNamesForFilter = names.map(n => n.toLowerCase());
 
-                // 2. Filter by Date if provided
+            filteredVehicles = vehicles.filter(v => {
+                // 1. Phải khớp ngày bán nếu có lọc ngày
                 if (mode === 'SALE' && type === 'SALE_DATE' && from_date && to_date) {
                     const retailDate = v.RetailSale?.sale_date;
                     const wholesaleDate = v.WholesaleSale?.sale_date;
                     const dateToCheck = retailDate || wholesaleDate;
                     if (!dateToCheck) return false;
-                    const d = new Date(dateToCheck);
-                    return d >= new Date(from_date) && d <= new Date(to_date);
+                    const d = new Date(dateToCheck).getTime();
+                    const start = new Date(from_date).getTime();
+                    const end = new Date(endFull).getTime();
+                    if (d < start || d > end) return false;
                 }
+
+                // 2. Nếu lọc theo khách hàng
+                if (cleanNamesForFilter.length > 0) {
+                    const rName = (v.RetailSale?.customer_name || '').toLowerCase();
+                    const wName = (v.WholesaleSale?.WholesaleCustomer?.name || '').toLowerCase();
+                    
+                    const matches = cleanNamesForFilter.some(target => 
+                        rName.includes(target) || wName.includes(target)
+                    );
+                    if (!matches) return false;
+                }
+
 
                 return true;
             });
@@ -287,21 +342,41 @@ exports.getVehicleLookup = async (req, res) => {
             if (v.RetailSale) channel = 'Bán Lẻ';
             else if (v.WholesaleSale) channel = 'Bán Sỉ (Lô)';
 
+            // LOGIC TÍNH GIÁ BÁN:
+            // 1. Ưu tiên giá bán lẻ (RetailSale.total_price)
+            // 2. Nếu không có (bán buôn), lấy giá bán buôn từng chiếc (wholesale_price_vnd)
+            // 3. Nếu vẫn không có, lấy trung bình lô (total_amount_vnd / count)
+            let salePrice = 0;
+            if (v.RetailSale) {
+                salePrice = v.RetailSale.total_price;
+            } else if (v.WholesaleSale) {
+                // SỬA LỖI: Lấy giá bán buôn của từng xe (wholesale_price_vnd)
+                // Nếu chưa có (dữ liệu cũ), dùng trung bình lô (tổng / số lượng)
+                const lotCount = v.WholesaleSale.Vehicles?.length || 1; // Tuy nhiên includes không có Vehicles ở đây
+                // Vì không include Vehicles, ta có thể dùng wholesale_price_vnd làm chính
+                // Nếu không có, tạm thời dùng total_amount_vnd (nhưng đây là lỗi gốc) 
+                // Tốt nhất là Number(v.wholesale_price_vnd) || 0
+                salePrice = Number(v.wholesale_price_vnd || 0);
+            }
+
             return {
                 id: v.id,
                 engine_no: v.engine_no,
                 chassis_no: v.chassis_no,
                 type_name: v.VehicleType?.name,
                 color_name: v.VehicleColor?.color_name,
+                warehouse_name: v.Warehouse?.warehouse_name || 'N/A', // ADDED
                 import_date: v.Purchase?.purchase_date,
                 importer_name: v.Purchase?.creator?.full_name || 'N/A',
                 supplier_name: v.Purchase?.Supplier?.name || 'N/A',
                 purchase_price: v.price_vnd,
                 sale_date: saleDate,
                 sale_channel: channel,
-                sale_price: v.RetailSale?.total_price || v.WholesaleSale?.total_amount_vnd, // Note: Wholesale price is for the whole lot, might need logic adjustment if per-vehicle
+                sale_price: salePrice,
                 customer_name: v.RetailSale?.customer_name || v.WholesaleSale?.WholesaleCustomer?.name || 'N/A',
                 address: v.RetailSale?.address || v.WholesaleSale?.WholesaleCustomer?.address || 'N/A',
+                wholesale_sale_id: v.wholesale_sale_id,
+                purchase_id: v.purchase_id,
                 guarantee: v.RetailSale?.guarantee || 'Không',
                 payment_method: v.RetailSale?.payment_method,
                 bank_name: v.RetailSale?.bank_name,
@@ -438,7 +513,12 @@ exports.getWholesaleAudit = async (req, res) => {
 
         let whereSale = { customer_id };
         if (from_date && to_date) {
-            whereSale.sale_date = { [Op.between]: [from_date, to_date] };
+            whereSale[Op.and] = [
+                sequelize.where(
+                    sequelize.fn('date', sequelize.fn('timezone', 'Asia/Ho_Chi_Minh', sequelize.col('sale_date'))),
+                    { [Op.between]: [from_date, to_date] }
+                )
+            ];
         }
 
         // 1. Lấy tất cả các xe đã bán cho khách này
@@ -476,7 +556,14 @@ exports.getWholesaleAudit = async (req, res) => {
         const payments = await WholesalePayment.findAll({
             where: { 
                 wholesale_sale_id: { [Op.in]: saleIds },
-                ...(from_date && to_date ? { payment_date: { [Op.between]: [from_date, to_date] } } : {})
+                ...(from_date && to_date ? { 
+                    [Op.and]: [
+                        sequelize.where(
+                            sequelize.fn('date', sequelize.fn('timezone', 'Asia/Ho_Chi_Minh', sequelize.col('payment_date'))),
+                            { [Op.between]: [from_date, to_date] }
+                        )
+                    ]
+                } : {})
             },
             order: [['payment_date', 'DESC']]
         });
@@ -496,6 +583,7 @@ exports.getWholesaleAudit = async (req, res) => {
                 engine_no: v.engine_no,
                 chassis_no: v.chassis_no,
                 color_name: v.VehicleColor?.color_name,
+                wholesale_price_vnd: v.wholesale_price_vnd,
                 sale_price_lot: v.WholesaleSale?.total_amount_vnd,
                 lot_vehicles_count: vehicles.filter(x => x.wholesale_sale_id === v.wholesale_sale_id).length
             })),
@@ -518,12 +606,12 @@ exports.getRetailSalesReport = async (req, res) => {
         let where = {};
         
         if (from_date && to_date) {
-            where.sale_date = { 
-                [Op.between]: [
-                    dayjs(from_date).startOf('day').toDate(), 
-                    dayjs(to_date).endOf('day').toDate()
-                ] 
-            };
+            where[Op.and] = [
+                sequelize.where(
+                    sequelize.fn('date', sequelize.fn('timezone', 'Asia/Ho_Chi_Minh', sequelize.col('sale_date'))),
+                    { [Op.between]: [from_date, to_date] }
+                )
+            ];
         }
 
         if (has_debt === 'true') {
@@ -544,7 +632,12 @@ exports.getRetailSalesReport = async (req, res) => {
                     model: Vehicle,
                     include: [
                         { model: VehicleType, attributes: ['name'] },
-                        { model: VehicleColor, attributes: ['color_name'] }
+                        { model: VehicleColor, attributes: ['color_name'] },
+                        { 
+                            model: Purchase, 
+                            attributes: ['purchase_date'],
+                            include: [{ model: Supplier, attributes: ['name'] }]
+                        }
                     ]
                 },
                 { model: User, as: 'seller', attributes: ['full_name'] }
@@ -552,13 +645,23 @@ exports.getRetailSalesReport = async (req, res) => {
             order: [['sale_date', 'DESC']]
         });
 
-        // Tính toán tổng hợp cho Footer (Tổng số xe, Doanh thu, Thực thu, Tổng nợ)
+        // Tín toán tổng hợp cho Footer (Tổng số xe, Doanh thu, Thực thu, Tổng nợ)
         const summary = {
             total_count: sales.length,
             total_revenue: sales.reduce((sum, s) => sum + Number(s.total_price || 0), 0),
             total_collected: sales.reduce((sum, s) => sum + Number(s.paid_amount || 0) + (s.is_disbursed ? Number(s.loan_amount || 0) : 0), 0),
-            total_debt: sales.reduce((sum, s) => sum + (Number(s.total_price || 0) - Number(s.paid_amount || 0) - (s.is_disbursed ? Number(s.loan_amount || 0) : 0)), 0)
+            total_debt: sales.reduce((sum, s) => sum + (Number(s.total_price || 0) - Number(s.paid_amount || 0) - (s.is_disbursed ? Number(s.loan_amount || 0) : 0)), 0),
+            total_gifts: {}
         };
+
+        // Đếm tổng số lượng quà tặng đã phát
+        sales.forEach(s => {
+            if (s.gifts && Array.isArray(s.gifts)) {
+                s.gifts.forEach(giftName => {
+                    summary.total_gifts[giftName] = (summary.total_gifts[giftName] || 0) + 1;
+                });
+            }
+        });
 
         res.json({ sales, summary });
 
@@ -571,20 +674,32 @@ exports.getWarrantyReport = async (req, res) => {
     try {
         const { month, year, turn } = req.query; // turn: 1, 2, 3, 4
         
-        // Xác định số tháng cộng thêm dựa trên lượt bảo hành 
-        // Lần 1: 1 tháng, Lần 2: 6 tháng, Lần 3: 12 tháng, Lần 4: 18 tháng
-        const turnIntervals = { '1': 1, '2': 6, '3': 12, '4': 18 };
+        // Xác định số tháng cộng thêm dựa trên lượt bảo hành (Lần 1: 1th, Lần 2-7: 6th, 12th, 18th, 24th, 30th, 36th)
+        const turnIntervals = { 
+            '1': 1, 
+            '2': 6, 
+            '3': 12, 
+            '4': 18, 
+            '5': 24, 
+            '6': 30, 
+            '7': 36 
+        };
         const monthsToAdd = turnIntervals[turn] || 1;
 
         // Tính ngày bắt đầu và kết thúc của tháng đích
-        const targetMonthDate = dayjs(`${year}-${month}-01`);
+        const targetMonthDate = dayjs.tz(`${year}-${month}-01`);
         
         // Tìm xe đã bán cách đây X tháng so với tháng đích
-        const saleMonthStart = targetMonthDate.subtract(monthsToAdd, 'month').startOf('month').toDate();
-        const saleMonthEnd = targetMonthDate.subtract(monthsToAdd, 'month').endOf('month').toDate();
+        const saleMonthStartStr = targetMonthDate.subtract(monthsToAdd, 'month').startOf('month').format('YYYY-MM-DD');
+        const saleMonthEndStr = targetMonthDate.subtract(monthsToAdd, 'month').endOf('month').format('YYYY-MM-DD');
 
         let where = {
-            sale_date: { [Op.between]: [saleMonthStart, saleMonthEnd] },
+            [Op.and]: [
+                sequelize.where(
+                    sequelize.fn('date', sequelize.fn('timezone', 'Asia/Ho_Chi_Minh', sequelize.col('sale_date'))),
+                    { [Op.between]: [saleMonthStartStr, saleMonthEndStr] }
+                )
+            ],
             guarantee: 'Có'
         };
 
@@ -620,9 +735,8 @@ exports.getWarrantyReport = async (req, res) => {
 exports.getDailyReport = async (req, res) => {
     try {
         const { date, warehouse_id } = req.query;
-        const targetDate = date ? dayjs(date).startOf('day') : dayjs().startOf('day');
-        const start = targetDate.toDate();
-        const end = targetDate.endOf('day').toDate();
+        // date string from frontend is YYYY-MM-DD
+        const dateStr = date || dayjs.tz().format('YYYY-MM-DD');
 
         let whereShared = {
             [Op.and]: [
@@ -630,26 +744,25 @@ exports.getDailyReport = async (req, res) => {
             ]
         };
 
-        // If using transaction dates (preferred for bookkeeping)
-        let retailDateWhere = { sale_date: { [Op.between]: [start, end] } };
-        let wholesaleDateWhere = { sale_date: { [Op.between]: [start, end] } };
-        let purchaseDateWhere = { purchase_date: { [Op.between]: [start, end] } };
+        // Using SQL side timezone conversion for daily report consistency
+        const tz = 'Asia/Ho_Chi_Minh';
+        let retailDateWhere = sequelize.where(sequelize.fn('date', sequelize.fn('timezone', tz, sequelize.col('sale_date'))), dateStr);
+        let wholesaleDateWhere = sequelize.where(sequelize.fn('date', sequelize.fn('timezone', tz, sequelize.col('sale_date'))), dateStr);
+        let purchaseDateWhere = sequelize.where(sequelize.fn('date', sequelize.fn('timezone', tz, sequelize.col('purchase_date'))), dateStr);
         
-        let retailPaymentWhere = { payment_date: { [Op.between]: [start, end] } };
-        let wholesalePaymentWhere = { payment_date: { [Op.between]: [start, end] } };
-        let purchasePaymentWhere = { payment_date: { [Op.between]: [start, end] } };
-        let transferPaymentWhere = { payment_date: { [Op.between]: [start, end] } };
-        let expenseWhere = { createdAt: { [Op.between]: [start, end] } }; // Expenses usually use createdAt
+        let retailPaymentWhere = sequelize.where(sequelize.fn('date', sequelize.fn('timezone', tz, sequelize.col('payment_date'))), dateStr);
+        let wholesalePaymentWhere = sequelize.where(sequelize.fn('date', sequelize.fn('timezone', tz, sequelize.col('payment_date'))), dateStr);
+        let purchasePaymentWhere = sequelize.where(sequelize.fn('date', sequelize.fn('timezone', tz, sequelize.col('payment_date'))), dateStr);
+        let transferPaymentWhere = sequelize.where(sequelize.fn('date', sequelize.fn('timezone', tz, sequelize.col('payment_date'))), dateStr);
+        let expenseWhere = sequelize.where(sequelize.fn('date', sequelize.fn('timezone', tz, sequelize.col('createdAt'))), dateStr);
 
         // Filter by warehouse if provided or if user is limited
         const targetWH = warehouse_id || (req.user.role !== 'ADMIN' ? req.user.warehouse_id : null);
         if (targetWH) {
-            retailDateWhere.warehouse_id = targetWH;
-            wholesaleDateWhere.warehouse_id = targetWH;
-            purchaseDateWhere.warehouse_id = targetWH;
-            expenseWhere.warehouse_id = targetWH;
-            // For payments, we rely on the parent's warehouse. 
-            // In these simplified queries, we'll filter them if needed by joining.
+            retailDateWhere = { [Op.and]: [retailDateWhere, { warehouse_id: targetWH }] };
+            wholesaleDateWhere = { [Op.and]: [wholesaleDateWhere, { warehouse_id: targetWH }] };
+            purchaseDateWhere = { [Op.and]: [purchaseDateWhere, { warehouse_id: targetWH }] };
+            expenseWhere = { [Op.and]: [expenseWhere, { warehouse_id: targetWH }] };
         }
 
         // 1. RETAIL SALES SUMMARY
@@ -698,7 +811,12 @@ exports.getDailyReport = async (req, res) => {
                 wholesaleRevenue,
                 retailCount,
                 wholesaleCount,
-                purchaseCount: await Vehicle.count({ where: { purchase_id: { [Op.in]: purchases.map(p => p.id) } } }),
+                giftDistribution: retailSales.reduce((acc, s) => {
+                    if (s.gifts && Array.isArray(s.gifts)) {
+                        s.gifts.forEach(g => acc[g] = (acc[g] || 0) + 1);
+                    }
+                    return acc;
+                }, {}),
                 totalIncome: collections,
                 totalOutcome: outflow + (expensesTotal || 0),
                 collections,
@@ -708,6 +826,186 @@ exports.getDailyReport = async (req, res) => {
             }
         });
 
+    } catch (e) {
+        res.status(500).json({ message: e.message });
+    }
+};
+
+exports.getPartInventoryReport = async (req, res) => {
+    try {
+        const { warehouse_id, query } = req.query;
+        let where = {};
+        let partWhere = {};
+
+        if (query) {
+            partWhere[Op.or] = [
+                { code: { [Op.iLike]: `%${query}%` } },
+                { name: { [Op.iLike]: `%${query}%` } }
+            ];
+        }
+
+        const targetWH = warehouse_id || (req.user.role !== 'ADMIN' ? req.user.warehouse_id : null);
+        if (targetWH) {
+            where.warehouse_id = targetWH;
+        }
+
+        // 1. Fetch all relevant parts
+        const parts = await Part.findAll({
+            where: partWhere,
+            include: [{ model: Part, as: 'LinkedPart', attributes: ['id', 'code', 'unit'] }],
+            order: [['code', 'ASC']]
+        });
+
+        // 2. Fetch all raw inventory records for the target warehouse
+        const rawInventory = await PartInventory.findAll({
+            where,
+            include: [{ model: Warehouse, attributes: ['warehouse_name'] }]
+        });
+
+        // 3. Map inventory for quick lookup
+        const inventoryMap = new Map();
+        rawInventory.forEach(inv => {
+            inventoryMap.set(`${inv.part_id}_${inv.warehouse_id}`, inv);
+        });
+
+        // 4. Build report by calculating balances for each part
+        const reportInventory = [];
+        const warehouses_to_process = warehouse_id ? [warehouse_id] : Array.from(new Set(rawInventory.map(i => i.warehouse_id)));
+
+        for (const warehouseId of warehouses_to_process) {
+            const warehouseName = rawInventory.find(i => i.warehouse_id === warehouseId)?.Warehouse?.warehouse_name || 'Kho mặc định';
+            
+            for (const part of parts) {
+                // Determine which part ID holds the actual stock
+                const actualStockPartId = part.linked_part_id || part.id;
+                const conversion = part.default_conversion_rate || 1;
+                
+                const stockRecord = inventoryMap.get(`${actualStockPartId}_${warehouseId}`);
+                if (!stockRecord && !warehouse_id) continue; // Skip if no stock and looking at global
+
+                // Calculate virtual quantity in the current part's unit
+                const rawQty = Number(stockRecord?.quantity || 0);
+                const displayQty = part.linked_part_id ? (rawQty / conversion) : rawQty;
+
+                if (displayQty > 0 || warehouse_id) { // Show all if filtered by warehouse, else only those with stock
+                    reportInventory.push({
+                        id: `${part.id}_${warehouseId}`,
+                        part_id: part.id,
+                        warehouse_id: warehouseId,
+                        quantity: displayQty,
+                        location: stockRecord?.location || '',
+                        Part: part,
+                        Warehouse: { warehouse_name: warehouseName }
+                    });
+                }
+            }
+        }
+
+        const summary = {
+            total_items: reportInventory.length,
+            total_quantity: reportInventory.reduce((sum, item) => sum + Number(item.quantity || 0), 0),
+            total_value: reportInventory.reduce((sum, item) => sum + (Number(item.quantity || 0) * Number(item.Part?.purchase_price || 0)), 0)
+        };
+
+        res.json({ inventory: reportInventory, summary });
+    } catch (e) {
+        res.status(500).json({ message: e.message });
+    }
+};
+
+exports.getPartPurchasesReport = async (req, res) => {
+    try {
+        const { from_date, to_date, supplier_id, warehouse_id, query } = req.query;
+        let where = {};
+        
+        if (from_date && to_date) {
+            where.purchase_date = { [Op.between]: [dayjs(from_date).startOf('day').toDate(), dayjs(to_date).endOf('day').toDate()] };
+        }
+
+        if (supplier_id) where.supplier_id = supplier_id;
+
+        const targetWH = warehouse_id || (req.user.role !== 'ADMIN' ? req.user.warehouse_id : null);
+        if (targetWH) where.warehouse_id = targetWH;
+
+        let itemWhere = {};
+        if (query) {
+            // Find purchases containing specific part code/name
+            const partIds = (await Part.findAll({
+                where: {
+                    [Op.or]: [
+                        { code: { [Op.iLike]: `%${query}%` } },
+                        { name: { [Op.iLike]: `%${query}%` } }
+                    ]
+                },
+                attributes: ['id']
+            })).map(p => p.id);
+            itemWhere.part_id = { [Op.in]: partIds };
+        }
+
+        const purchases = await PartPurchase.findAll({
+            where,
+            include: [
+                { model: Supplier, attributes: ['name'] },
+                { model: Warehouse, attributes: ['warehouse_name'] },
+                { model: User, as: 'creator', attributes: ['full_name'] },
+                { 
+                    model: PartPurchaseItem, 
+                    where: Object.keys(itemWhere).length > 0 ? itemWhere : undefined,
+                    required: Object.keys(itemWhere).length > 0,
+                    include: [{ model: Part, attributes: ['code', 'name', 'unit'] }] 
+                }
+            ],
+            order: [['purchase_date', 'DESC'], ['createdAt', 'DESC']]
+        });
+
+        res.json(purchases);
+    } catch (e) {
+        res.status(500).json({ message: e.message });
+    }
+};
+
+exports.getPartSalesReport = async (req, res) => {
+    try {
+        const { from_date, to_date, warehouse_id, query } = req.query;
+        let where = {};
+
+        if (from_date && to_date) {
+            where.sale_date = { [Op.between]: [dayjs(from_date).startOf('day').toDate(), dayjs(to_date).endOf('day').toDate()] };
+        }
+
+        const targetWH = warehouse_id || (req.user.role !== 'ADMIN' ? req.user.warehouse_id : null);
+        if (targetWH) where.warehouse_id = targetWH;
+
+        let itemWhere = {};
+        if (query) {
+            const partIds = (await Part.findAll({
+                where: {
+                    [Op.or]: [
+                        { code: { [Op.iLike]: `%${query}%` } },
+                        { name: { [Op.iLike]: `%${query}%` } }
+                    ]
+                },
+                attributes: ['id']
+            })).map(p => p.id);
+            itemWhere.part_id = { [Op.in]: partIds };
+        }
+
+        const sales = await PartSale.findAll({
+            where,
+            include: [
+                { model: Warehouse, attributes: ['warehouse_name'] },
+                { model: User, as: 'seller', attributes: ['full_name'] },
+                { 
+                    model: PartSaleItem, 
+                    where: Object.keys(itemWhere).length > 0 ? itemWhere : undefined,
+                    required: Object.keys(itemWhere).length > 0,
+                    include: [{ model: Part, attributes: ['code', 'name', 'unit'] }] 
+                }
+            ],
+            order: [['sale_date', 'DESC'], ['createdAt', 'DESC']]
+        });
+
+        res.json(sales);
     } catch (e) {
         res.status(500).json({ message: e.message });
     }

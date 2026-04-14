@@ -1,13 +1,13 @@
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/database');
 
-const PartPurchase = sequelize.define('PartPurchase', {
+const GiftTransaction = sequelize.define('GiftTransaction', {
   id: {
     type: DataTypes.UUID,
     defaultValue: DataTypes.UUIDV4,
     primaryKey: true
   },
-  supplier_id: {
+  gift_id: {
     type: DataTypes.UUID,
     allowNull: false
   },
@@ -15,29 +15,21 @@ const PartPurchase = sequelize.define('PartPurchase', {
     type: DataTypes.UUID,
     allowNull: false
   },
-  purchase_date: {
-    type: DataTypes.DATE,
+  type: {
+    type: DataTypes.ENUM('IMPORT', 'EXPORT_RETAIL', 'EXPORT_EVENT', 'OTHER_EXPORT'),
     allowNull: false
   },
-  invoice_no: {
+  quantity: {
+    type: DataTypes.DECIMAL(15, 2),
+    allowNull: false
+  },
+  transaction_date: {
+    type: DataTypes.DATE,
+    defaultValue: DataTypes.NOW
+  },
+  event_name: {
     type: DataTypes.STRING,
     allowNull: true
-  },
-  po_number: {
-    type: DataTypes.STRING,
-    allowNull: true
-  },
-  total_amount: {
-    type: DataTypes.DECIMAL(20, 2),
-    defaultValue: 0
-  },
-  paid_amount: {
-    type: DataTypes.DECIMAL(20, 2),
-    defaultValue: 0
-  },
-  vat_percent: {
-    type: DataTypes.INTEGER,
-    defaultValue: 0
   },
   notes: {
     type: DataTypes.TEXT,
@@ -51,4 +43,4 @@ const PartPurchase = sequelize.define('PartPurchase', {
   timestamps: true
 });
 
-module.exports = PartPurchase;
+module.exports = GiftTransaction;

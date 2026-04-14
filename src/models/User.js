@@ -50,6 +50,18 @@ const User = sequelize.define('User', {
   can_manage_master_data: {
     type: DataTypes.BOOLEAN,
     defaultValue: false
+  },
+  can_manage_sales: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
+  },
+  can_manage_expenses: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
+  },
+  expense_warehouses: {
+    type: DataTypes.TEXT, // Chuỗi lưu ID kho cách nhau bởi dấu phẩy
+    allowNull: true
   }
 }, {
   timestamps: true

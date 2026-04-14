@@ -36,6 +36,14 @@ const Part = sequelize.define('Part', {
       type: DataTypes.INTEGER,
       defaultValue: 1
   },
+  linked_part_id: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: {
+          model: 'Parts',
+          key: 'id'
+      }
+  },
   description: {
     type: DataTypes.TEXT,
     allowNull: true
@@ -43,5 +51,7 @@ const Part = sequelize.define('Part', {
 }, {
   timestamps: true
 });
+
+Part.belongsTo(Part, { as: 'LinkedPart', foreignKey: 'linked_part_id' });
 
 module.exports = Part;

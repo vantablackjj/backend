@@ -1,12 +1,18 @@
 const Expense = require('../models/Expense');
 const Vehicle = require('../models/Vehicle');
 const Warehouse = require('../models/Warehouse');
+const { Op } = require('sequelize');
 
 exports.getAll = async (req, res) => {
   try {
     let where = {};
     if (req.user.role !== 'ADMIN') {
-      where.warehouse_id = req.user.warehouse_id;
+      if (req.user.expense_warehouses) {
+        const warehouseIds = req.user.expense_warehouses.split(',').filter(id => id.trim() !== '');
+        where.warehouse_id = { [Op.in]: warehouseIds };
+      } else {
+        where.warehouse_id = req.user.warehouse_id;
+      }
     }
 
     const list = await Expense.findAll({ 
@@ -27,8 +33,20 @@ exports.create = async (req, res) => {
   try {
     const data = { ...req.body };
     // Non-admin can only create expenses for their own warehouse
+    // Non-admin can only create expenses for their own warehouse or allowed warehouses
     if (req.user.role !== 'ADMIN') {
-      data.warehouse_id = req.user.warehouse_id;
+      if (req.user.expense_warehouses) {
+        const warehouseIds = req.user.expense_warehouses.split(',').filter(id => id.trim() !== '');
+        // If provided warehouse_id is not in allowed list, default to their primary warehouse_id
+        if (data.warehouse_id && !warehouseIds.includes(data.warehouse_id)) {
+           return res.status(403).json({ message: 'Bạn không có quyền tạo chi tiêu cho kho này!' });
+        }
+        if (!data.warehouse_id) {
+            data.warehouse_id = req.user.warehouse_id;
+        }
+      } else {
+        data.warehouse_id = req.user.warehouse_id;
+      }
     }
     const expense = await Expense.create(data);
 
@@ -43,7 +61,12 @@ exports.delete = async (req, res) => {
     const { id } = req.params;
     let where = { id };
     if (req.user.role !== 'ADMIN') {
-      where.warehouse_id = req.user.warehouse_id;
+      if (req.user.expense_warehouses) {
+        const warehouseIds = req.user.expense_warehouses.split(',').filter(id => id.trim() !== '');
+        where.warehouse_id = { [Op.in]: warehouseIds };
+      } else {
+        where.warehouse_id = req.user.warehouse_id;
+      }
     }
     await Expense.destroy({ where });
     res.json({ message: 'Đã xóa chi tiêu thành công' });

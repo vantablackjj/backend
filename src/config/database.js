@@ -6,9 +6,9 @@ const sequelize = process.env.DATABASE_URL
     dialect: 'postgres',
     logging: false,
     pool: {
-      max: 5,
+      max: 20,
       min: 0,
-      acquire: 30000,
+      acquire: 60000,
       idle: 10000
     }
   })
@@ -22,9 +22,9 @@ const sequelize = process.env.DATABASE_URL
         dialect: 'postgres',
         logging: false,
         pool: {
-          max: 5,
+          max: 20,
           min: 0,
-          acquire: 30000,
+          acquire: 60000,
           idle: 10000
         }
       }

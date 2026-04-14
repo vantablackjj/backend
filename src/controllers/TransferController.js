@@ -36,7 +36,12 @@ exports.requestTransfer = async (req, res) => {
 
         // 1. Kiểm tra xe (Phải thuộc kho gốc và đang Sẵn sàng)
         const vehicles = await Vehicle.findAll({ 
-            where: { id: vehicle_ids, warehouse_id: activeFromWH, status: 'In Stock' } 
+            where: { 
+                id: vehicle_ids, 
+                warehouse_id: activeFromWH, 
+                status: 'In Stock',
+                is_locked: false 
+            } 
         });
 
         if (vehicles.length !== vehicle_ids.length) {
@@ -124,6 +129,16 @@ exports.approveTransfer = async (req, res) => {
             throw new Error('Phiếu không hợp lệ hoặc đã được xử lý!');
         }
 
+        // Cập nhật từng xe (Gia cố: đảm bảo xe vẫn ở đúng kho và trạng thái đang chờ)
+        const items = await TransferItem.findAll({ where: { transfer_id: id } });
+        for (const item of items) {
+            const vehicle = await Vehicle.findByPk(item.vehicle_id);
+            if (!vehicle || vehicle.status !== 'Transferring') {
+                 // Nếu xe không còn ở trạng thái đang chuyển (ví dụ bị admin can thiệp), ta dùng lỗi
+                 throw new Error(`Xe ${vehicle?.engine_no || ''} không còn ở trạng thái chờ duyệt chuyển!`);
+            }
+        }
+
         // Cập nhật trạng thái phiếu
         transfer.status = 'ADMIN_APPROVED';
         transfer.approved_by = req.user.id;
@@ -192,10 +207,16 @@ exports.receiveTransfer = async (req, res) => {
         const items = await TransferItem.findAll({ where: { transfer_id: id } });
         for (const item of items) {
             const vehicle = await Vehicle.findByPk(item.vehicle_id);
-            vehicle.warehouse_id = transfer.to_warehouse_id;
-            vehicle.status = 'In Stock';
-            vehicle.is_locked = false; // MỞ KHÓA KHI NHẬN
-            await vehicle.save({ transaction });
+            if (vehicle) {
+                vehicle.warehouse_id = transfer.to_warehouse_id;
+                // CHỈ cập nhật về 'In Stock' nếu xe ĐANG ở trạng thái 'Transferring'
+                // Nếu xe đã bị can thiệp sang 'Sold' hoặc trạng thái khác, ta giữ nguyên trạng thái đó
+                if (vehicle.status === 'Transferring') {
+                    vehicle.status = 'In Stock';
+                }
+                vehicle.is_locked = false; // Luôn mở khóa khi kết thúc phiếu
+                await vehicle.save({ transaction });
+            }
         }
 
 
@@ -265,7 +286,13 @@ exports.getDetails = async (req, res) => {
         });
         const items = await TransferItem.findAll({ where: { transfer_id: id } });
         const vehicleIds = items.map(i => i.vehicle_id);
-        const vehicles = await Vehicle.findAll({ where: { id: vehicleIds } });
+        const vehicles = await Vehicle.findAll({ 
+            where: { id: vehicleIds },
+            include: [
+                { model: require('../models/VehicleType'), as: 'VehicleType', attributes: ['name'] },
+                { model: require('../models/VehicleColor'), as: 'VehicleColor', attributes: ['color_name'] }
+            ]
+        });
         const logs = await TransferLog.findAll({ where: { transfer_id: id }, order: [['timestamp', 'ASC']] });
         const payments = await TransferPayment.findAll({ where: { transfer_id: id }, order: [['payment_date', 'ASC']] });
 
@@ -298,9 +325,14 @@ exports.cancelTransfer = async (req, res) => {
         const items = await TransferItem.findAll({ where: { transfer_id: id } });
         for (const item of items) {
             const vehicle = await Vehicle.findByPk(item.vehicle_id);
-            vehicle.status = 'In Stock';
-            vehicle.is_locked = false; // MỞ KHÓA KHI HỦY
-            await vehicle.save({ transaction });
+            if (vehicle) {
+                // CHỈ cập nhật về 'In Stock' nếu xe ĐANG ở trạng thái 'Transferring'
+                if (vehicle.status === 'Transferring') {
+                    vehicle.status = 'In Stock';
+                }
+                vehicle.is_locked = false; // MỞ KHÓA KHI HỦY
+                await vehicle.save({ transaction });
+            }
         }
 
 
@@ -341,15 +373,34 @@ exports.updateTransfer = async (req, res) => {
         // 2. Xóa các TransferItem cũ
         await TransferItem.destroy({ where: { transfer_id: id }, transaction: t });
 
-        // 3. Kiểm tra xe mới và KHÓA xe mới
-        const newVehicles = await Vehicle.findAll({ where: { id: vehicle_ids }, transaction: t });
+        // 3. Kiểm tra xe mới (Phải thuộc kho xuất và đang Sẵn sàng)
+        const activeFromWH = from_warehouse_id;
+        const newVehicles = await Vehicle.findAll({ 
+            where: { 
+                id: vehicle_ids, 
+                warehouse_id: activeFromWH,
+                status: 'In Stock',
+                is_locked: false
+            }, 
+            transaction: t 
+        });
+
+        if (newVehicles.length !== vehicle_ids.length) {
+            throw new Error('Một số xe mới chọn không có trong kho xuất, đã bán hoặc đang ở phiếu chuyển khác!');
+        }
+
         let totalVal = 0;
         for (const v of newVehicles) {
             totalVal += Number(v.price_vnd || 0);
             v.status = 'Transferring';
             v.is_locked = true; // KHÓA XE MỚI
             await v.save({ transaction: t });
-            await TransferItem.create({ transfer_id: id, vehicle_id: v.id, original_price: v.price_vnd }, { transaction: t });
+            
+            await TransferItem.create({ 
+                transfer_id: id, 
+                vehicle_id: v.id, 
+                original_price: v.price_vnd 
+            }, { transaction: t });
         }
 
 

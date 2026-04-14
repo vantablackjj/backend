@@ -38,6 +38,12 @@ const PartSaleItem = require('./models/PartSaleItem');
 const MaintenanceOrder = require('./models/MaintenanceOrder');
 const MaintenanceItem = require('./models/MaintenanceItem');
 const Mechanic = require('./models/Mechanic');
+const LiftTable = require('./models/LiftTable');
+
+// Gift Management Models
+const Gift = require('./models/Gift');
+const GiftInventory = require('./models/GiftInventory');
+const GiftTransaction = require('./models/GiftTransaction');
 
 // Associations
 // 1. Vehicle
@@ -121,7 +127,23 @@ MaintenanceOrder.hasMany(MaintenanceItem, { foreignKey: 'maintenance_order_id' }
 MaintenanceItem.belongsTo(MaintenanceOrder, { foreignKey: 'maintenance_order_id' });
 MaintenanceItem.belongsTo(Part, { foreignKey: 'part_id' });
 
+// 9. Lift Tables
+LiftTable.belongsTo(Warehouse, { foreignKey: 'warehouse_id' });
+Warehouse.hasMany(LiftTable, { foreignKey: 'warehouse_id' });
+MaintenanceOrder.belongsTo(LiftTable, { foreignKey: 'lift_table_id' });
+LiftTable.hasMany(MaintenanceOrder, { foreignKey: 'lift_table_id' });
+
 Mechanic.belongsTo(Warehouse, { foreignKey: 'warehouse_id' });
+
+// 10. Promotional Gift Associations
+GiftInventory.belongsTo(Gift, { foreignKey: 'gift_id' });
+GiftInventory.belongsTo(Warehouse, { foreignKey: 'warehouse_id' });
+Gift.hasMany(GiftInventory, { foreignKey: 'gift_id' });
+
+GiftTransaction.belongsTo(Gift, { foreignKey: 'gift_id' });
+GiftTransaction.belongsTo(Warehouse, { foreignKey: 'warehouse_id' });
+GiftTransaction.belongsTo(User, { as: 'creator', foreignKey: 'created_by' });
+Gift.hasMany(GiftTransaction, { foreignKey: 'gift_id' });
 
 
 const masterDataRoutes = require('./routes/masterData');
@@ -186,6 +208,7 @@ app.use('/api/notifications', verifyToken, require('./routes/notificationRoutes'
 app.use('/api/dashboard', verifyToken, isAdmin, require('./routes/dashboardRoutes'));
 app.use('/api', verifyToken, require('./routes/partRoutes'));
 app.use('/api/import', verifyToken, require('./routes/importRoutes'));
+app.use('/api/gifts', verifyToken, require('./routes/giftRoutes'));
 
 
 app.get('/', (req, res) => {

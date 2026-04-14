@@ -1,12 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const partController = require('../controllers/partController');
-const { verifyToken, isAdmin } = require('../middleware/authMiddleware');
+const { verifyToken, isAdmin, canManageSpareParts } = require('../middleware/authMiddleware');
 
 // Parts
 router.get('/parts', partController.getParts);
-router.post('/parts', isAdmin, partController.createPart);
-router.put('/parts/:id', isAdmin, partController.updatePart);
+router.post('/parts', canManageSpareParts, partController.createPart);
+router.put('/parts/:id', canManageSpareParts, partController.updatePart);
 router.delete('/parts/:id', isAdmin, partController.deletePart);
 
 // Inventory
@@ -16,6 +16,8 @@ router.get('/part-inventory', partController.getPartInventory);
 router.post('/part-purchase', partController.createPartPurchase);
 router.post('/part-sale', partController.createPartSale);
 router.post('/maintenance-order', partController.createMaintenanceOrder);
+router.put('/maintenance-order/:id', partController.updateMaintenanceOrder);
+
 router.get('/maintenance-orders', partController.getMaintenanceOrders);
 
 // Debt Management
