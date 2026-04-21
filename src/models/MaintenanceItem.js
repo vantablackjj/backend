@@ -38,6 +38,14 @@ const MaintenanceItem = sequelize.define('MaintenanceItem', {
   total_price: {
     type: DataTypes.DECIMAL(20, 2),
     defaultValue: 0
+  },
+  sale_type: {
+    type: DataTypes.ENUM('THU_NGAY', 'BAO_HANH', 'KHUYEN_MAI'),
+    defaultValue: 'THU_NGAY'
+  },
+  purchase_price: {
+    type: DataTypes.DECIMAL(15, 2),
+    defaultValue: 0
   }
 }, {
   timestamps: true

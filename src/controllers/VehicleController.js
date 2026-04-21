@@ -31,8 +31,11 @@ exports.getAll = async (req, res) => {
     }
 
     // Role-based filtering: Non-admins only see vehicles in their warehouse
+    // EXCEPT when searching specifically by engine number or chassis number (global search)
     if (req.user.role !== 'ADMIN') {
-      where.warehouse_id = req.user.warehouse_id;
+        if (!search && !engine_no && !chassis_no) {
+            where.warehouse_id = req.user.warehouse_id;
+        }
     }
 
     const vehicles = await Vehicle.findAll({

@@ -1,5 +1,7 @@
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 require('dotenv').config();
 const sequelize = require('./config/database');
 const http = require('http');
@@ -102,6 +104,7 @@ Purchase.belongsTo(Warehouse, { foreignKey: 'warehouse_id' });
 
 // 8. Spare Parts & Maintenance Associations
 PartInventory.belongsTo(Part, { foreignKey: 'part_id' });
+Part.hasMany(PartInventory, { foreignKey: 'part_id' });
 PartInventory.belongsTo(Warehouse, { foreignKey: 'warehouse_id' });
 
 PartPurchase.belongsTo(Supplier, { foreignKey: 'supplier_id' });
@@ -127,7 +130,22 @@ MaintenanceOrder.hasMany(MaintenanceItem, { foreignKey: 'maintenance_order_id' }
 MaintenanceItem.belongsTo(MaintenanceOrder, { foreignKey: 'maintenance_order_id' });
 MaintenanceItem.belongsTo(Part, { foreignKey: 'part_id' });
 
-// 9. Lift Tables
+// 9. Part Transfers
+const PartTransfer = require('./models/PartTransfer');
+const PartTransferItem = require('./models/PartTransferItem');
+const PartTransferLog = require('./models/PartTransferLog');
+
+PartTransfer.belongsTo(Warehouse, { as: 'FromWarehouse', foreignKey: 'from_warehouse_id' });
+PartTransfer.belongsTo(Warehouse, { as: 'ToWarehouse', foreignKey: 'to_warehouse_id' });
+PartTransfer.belongsTo(User, { as: 'creator', foreignKey: 'created_by' });
+PartTransfer.hasMany(PartTransferItem, { foreignKey: 'transfer_id' });
+PartTransferItem.belongsTo(PartTransfer, { foreignKey: 'transfer_id' });
+PartTransferItem.belongsTo(Part, { foreignKey: 'part_id' });
+PartTransfer.hasMany(PartTransferLog, { foreignKey: 'transfer_id' });
+PartTransferLog.belongsTo(PartTransfer, { foreignKey: 'transfer_id' });
+PartTransferLog.belongsTo(User, { foreignKey: 'user_id' });
+
+// 10. Lift Tables
 LiftTable.belongsTo(Warehouse, { foreignKey: 'warehouse_id' });
 Warehouse.hasMany(LiftTable, { foreignKey: 'warehouse_id' });
 MaintenanceOrder.belongsTo(LiftTable, { foreignKey: 'lift_table_id' });
@@ -193,8 +211,18 @@ const PORT = process.env.PORT || 5000;
 
 
 // Middleware
+app.use(helmet()); // Bảo mật HTTP headers
+app.disable('x-powered-by'); // Ẩn thông tin công nghệ
 app.use(cors());
 app.use(express.json());
+
+// Giới hạn lượt thử đăng nhập (Brute-force protection)
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 phút
+  max: 20, // 20 lần thử mỗi IP
+  message: { message: 'Thử lại quá nhiều lần, vui lòng đợi 15 phút.' }
+});
+app.use('/api/auth/login', loginLimiter);
 
 // Routes
 // Các luồng đăng nhập/đăng ký (không cần Token)

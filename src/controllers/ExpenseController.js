@@ -2,6 +2,7 @@ const Expense = require('../models/Expense');
 const Vehicle = require('../models/Vehicle');
 const Warehouse = require('../models/Warehouse');
 const { Op } = require('sequelize');
+const { sendNotification } = require('../utils/notificationHelper');
 
 exports.getAll = async (req, res) => {
   try {
@@ -49,6 +50,16 @@ exports.create = async (req, res) => {
       }
     }
     const expense = await Expense.create(data);
+    
+    // Notification: New Expense
+    const warehouseObj = await Warehouse.findByPk(data.warehouse_id || req.user.warehouse_id);
+    await sendNotification(req, {
+        title: '💸 Khoản chi mới',
+        message: `Nhân viên ${req.user.full_name} đã ghi nhận khoản chi ${Number(data.amount).toLocaleString()} đ tại [${warehouseObj?.warehouse_name || 'N/A'}]. Nội dung: ${data.content}.`,
+        type: 'EXPENSE',
+        warehouse_id: data.warehouse_id || req.user.warehouse_id,
+        link: '/finance/expenses'
+    });
 
     res.status(201).json(expense);
   } catch (error) {

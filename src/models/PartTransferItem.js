@@ -1,27 +1,30 @@
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/database');
 
-const PartInventory = sequelize.define('PartInventory', {
+const PartTransferItem = sequelize.define('PartTransferItem', {
   id: {
     type: DataTypes.UUID,
     defaultValue: DataTypes.UUIDV4,
     primaryKey: true
   },
+  transfer_id: {
+    type: DataTypes.UUID,
+    allowNull: false
+  },
   part_id: {
     type: DataTypes.UUID,
     allowNull: false
   },
-  warehouse_id: {
-    type: DataTypes.UUID,
-    allowNull: false
-  },
   quantity: {
-    type: DataTypes.DECIMAL(15, 2),
-    defaultValue: 0
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 1
   },
-
+  unit: {
+      type: DataTypes.STRING
+  }
 }, {
   timestamps: true
 });
 
-module.exports = PartInventory;
+module.exports = PartTransferItem;

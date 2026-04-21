@@ -20,9 +20,17 @@ const WholesaleCustomer = sequelize.define('WholesaleCustomer', {
     type: DataTypes.TEXT,
     allowNull: true
   },
+  phone: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
   payment_type: {
     type: DataTypes.ENUM('Trả gộp', 'Trả theo lô'),
     defaultValue: 'Trả gộp'
+  },
+  customer_type: {
+    type: DataTypes.ENUM('VEHICLE', 'PART', 'BOTH'),
+    defaultValue: 'VEHICLE'
   }
 }, {
   timestamps: true

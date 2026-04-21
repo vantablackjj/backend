@@ -16,6 +16,13 @@ const Gift = require('../models/Gift');
 const GiftInventory = require('../models/GiftInventory');
 const GiftTransaction = require('../models/GiftTransaction');
 const dayjs = require('dayjs');
+const Expense = require('../models/Expense');
+const Part = require('../models/Part');
+const PartInventory = require('../models/PartInventory');
+const PartPurchase = require('../models/PartPurchase');
+const PartPurchaseItem = require('../models/PartPurchaseItem');
+const PartSale = require('../models/PartSale');
+const PartSaleItem = require('../models/PartSaleItem');
 const customParseFormat = require('dayjs/plugin/customParseFormat');
 dayjs.extend(customParseFormat);
 
@@ -100,10 +107,7 @@ const detectDateFormat = (data) => {
     return null; // Ambiguous
 };
 
-const Part = require('../models/Part');
-const PartInventory = require('../models/PartInventory');
-const PartPurchase = require('../models/PartPurchase');
-const PartPurchaseItem = require('../models/PartPurchaseItem');
+
 
 const importData = async (req, res) => {
 
@@ -168,24 +172,41 @@ const importData = async (req, res) => {
       'tiền khách trả buôn': 'paid_amount_vnd',
       'đã trả': 'paid_amount_vnd',
       'mã phụ tùng': 'code',
+      'mã pt': 'code',
       'tên phụ tùng': 'name',
       'đơn vị': 'unit',
       'đơn vị tính': 'unit',
       'số lượng tồn': 'quantity',
       'số lượng': 'quantity',
-      'vị trí': 'location',
       'số po': 'po_number',
       'số hoá đơn hvn': 'invoice_no',
       'dnp': 'purchase_price', // Dealer Net Price
       'giá nhập': 'purchase_price',
-      'đơn giá': 'purchase_price',
+      'đơn giá': 'unit_price',
+      'giá sỉ': 'unit_price',
+      'giá bán lẻ': 'unit_price',
       'giá mua': 'purchase_price',
       'thành tiền chưa vat': 'total_amount_before_vat',
       'vat thành tiền': 'vat_amount',
       'vat': 'vat_percent',
+      'vat (%)': 'vat_percent',
       'ngày sinh': 'birthday',
       'ngày tháng năm sinh': 'birthday',
-      'dob': 'birthday'
+      'dob': 'birthday',
+      'phân loại mã': 'code_type',
+      'loại mã': 'code_type',
+      'tỷ lệ quy đổi': 'default_conversion_rate',
+      'quy đổi': 'default_conversion_rate',
+      'mã liên kết': 'linked_part_code',
+      'mô tả': 'description',
+      'ngày chi': 'expense_date',
+      'xe': 'engine_no',
+      'biển số': 'license_plate',
+      'nội dung': 'content',
+      'nội dung chi': 'content',
+      'số tiền': 'amount',
+      'số tiền thanh toán': 'amount',
+      'giá trị': 'amount'
     };
 
     // Normalize data: Map Vietnamese headers to English keys
@@ -229,6 +250,10 @@ const importData = async (req, res) => {
 
     // Use a small chunk size for transactions to prevent timeouts on large datasets (e.g. 2000 rows)
     const CHUNK_SIZE = 500;
+    
+    // BIỆN PHÁP BẢO VỆ: Nếu không phải Admin, ép buộc dùng warehouse_id của chính mình kể cả trong Excel
+    const enforcedWH = (req.user.role === 'ADMIN') ? null : req.user.warehouse_id;
+
     for (let i = 0; i < data.length; i += CHUNK_SIZE) {
         const chunk = data.slice(i, i + CHUNK_SIZE);
         const t = await sequelize.transaction();
@@ -271,12 +296,23 @@ const importData = async (req, res) => {
           case 'customers':
             const cName = row.customer_name || row.name;
             if (cName && row.customer_code) {
+              const rowType = row.type ? row.type.toString().toUpperCase() : null;
+              let finalType = req.body.customer_type || 'VEHICLE'; // Default to VEHICLE if not specified
+              
+              if (rowType) {
+                if (rowType.includes('PHỤ TÙNG') || rowType.includes('PART')) finalType = 'PART';
+                else if (rowType.includes('CẢ HAI') || rowType.includes('BOTH')) finalType = 'BOTH';
+                else if (rowType.includes('XE MÁY') || rowType.includes('VEHICLE')) finalType = 'VEHICLE';
+              }
+
               await WholesaleCustomer.findOrCreate({ 
                 where: { customer_code: row.customer_code }, 
                 defaults: { 
                     name: cName, 
                     address: row.address || '', 
-                    payment_type: row.payment_method || row.payment_type || 'Trả gộp' 
+                    phone: row.phone || '',
+                    payment_type: row.payment_method || row.payment_type || 'Trả gộp',
+                    customer_type: finalType
                 },
                 transaction: t
               });
@@ -316,14 +352,10 @@ const importData = async (req, res) => {
               
               const finalEngineNo = String(row.engine_no).trim().toUpperCase();
               const finalChassisNo = String(row.chassis_no).trim().toUpperCase();
-              // Warehouse Permission / Validation
-              let targetWarehouseId = warehouse_id;
-              if (!targetWarehouseId && row.warehouse_name) {
-                const wh = await Warehouse.findOne({ where: { warehouse_name: { [Op.iLike]: row.warehouse_name } }, transaction: t });
-                if (wh) targetWarehouseId = wh.id;
-              }
-
-              if (!targetWarehouseId) throw new Error(`Kho '${row.warehouse_name}' không tồn tại trong danh mục.`);
+              
+              // Warehouse Permission / Validation - ENFORCED
+              const targetWarehouseId = enforcedWH || warehouse_id || warehouseMap.get((row.warehouse_name || '').toLowerCase());
+              if (!targetWarehouseId) throw new Error(`Vui lòng xác định kho nhập hàng.`);
               
               // Permission Check
               if (req.user.role !== 'ADMIN' && req.user.warehouse_id && req.user.warehouse_id !== targetWarehouseId) {
@@ -423,9 +455,8 @@ const importData = async (req, res) => {
           case 'retail_sales':
              if (row.engine_no && row.customer_name && (row.selling_price || row.sale_price)) {
                 
-                const whName = row.warehouse_name || 'Kho mặc định';
-                const vWarehouseId = warehouseMap.get(whName.toLowerCase());
-                if (!vWarehouseId) throw new Error(`Kho '${whName}' không tồn tại trong hệ thống.`);
+                const vWarehouseId = enforcedWH || warehouseMap.get((row.warehouse_name || '').toLowerCase()) || warehouse_id;
+                if (!vWarehouseId) throw new Error(`Vui lòng xác định kho hàng.`);
 
                 let vehicle = await Vehicle.findOne({ 
                     where: { 
@@ -529,14 +560,13 @@ const importData = async (req, res) => {
 
           case 'wholesale_sales':
               if (row.engine_no && row.customer_code && (row.sale_price_vnd || row.selling_price || row.sale_price)) {
-                  
-                  const vWarehouse = await Warehouse.findOne({ where: { warehouse_name: row.warehouse_name || 'Kho mặc định' }, transaction: t });
-                  if (!vWarehouse) throw new Error(`Kho '${row.warehouse_name}' không tồn tại.`);
+                  const vWarehouseId = enforcedWH || warehouseMap.get((row.warehouse_name || '').toLowerCase()) || warehouse_id;
+                  if (!vWarehouseId) throw new Error(`Vui lòng xác định kho bán hàng.`);
 
                   let vehicle = await Vehicle.findOne({ 
                     where: { 
                         engine_no: row.engine_no, 
-                        warehouse_id: vWarehouse.id,
+                        warehouse_id: vWarehouseId,
                         status: 'In Stock', 
                         is_locked: false 
                     }, 
@@ -552,7 +582,7 @@ const importData = async (req, res) => {
                       vehicle = await Vehicle.findOne({ 
                         where: { 
                             engine_no: potentialId, 
-                            warehouse_id: vWarehouse.id,
+                            warehouse_id: vWarehouseId,
                             status: 'In Stock', 
                             is_locked: false 
                         }, 
@@ -562,7 +592,7 @@ const importData = async (req, res) => {
                     }
                   }
 
-                  if (!vehicle) throw new Error(`Số máy ${row.engine_no} không tồn tại trong kho ${vWarehouse.warehouse_name} hoặc đã bán.`);
+                  if (!vehicle) throw new Error(`Số máy ${row.engine_no} không tồn tại trong kho hoặc đã bán.`);
 
                   const customer = await WholesaleCustomer.findOne({ where: { customer_code: row.customer_code }, transaction: t });
                   if (!customer) throw new Error(`Khách buôn mã ${row.customer_code} không tồn tại.`);
@@ -608,42 +638,61 @@ const importData = async (req, res) => {
 
           case 'part_master':
             if (row.code) {
+              const codeType = (row.code_type && ['HONDA', 'SELF_CREATED'].includes(String(row.code_type).toUpperCase())) 
+                ? String(row.code_type).toUpperCase() 
+                : (String(row.code_type).toLowerCase() === 'xe ngoài' || String(row.code_type).toLowerCase() === 'tự tạo' ? 'SELF_CREATED' : 'HONDA');
+              
+              let linkedPartId = null;
+              if (row.linked_part_code) {
+                const lp = await Part.findOne({ where: { code: String(row.linked_part_code).trim().toUpperCase() }, transaction: t });
+                if (lp) linkedPartId = lp.id;
+              }
+
               const [vPart, created] = await Part.findOrCreate({
                 where: { code: row.code },
                 defaults: {
                   name: row.name || row.code,
                   unit: row.unit || 'Cái',
                   purchase_price: Number(row.purchase_price) || 0,
-                  selling_price: Number(row.selling_price) || 0
+                  selling_price: Number(row.selling_price) || 0,
+                  code_type: codeType,
+                  default_conversion_rate: Number(row.default_conversion_rate) || 1,
+                  linked_part_id: linkedPartId,
+                  description: row.description || ''
                 },
                 transaction: t
               });
 
               if (!created) {
-                await vPart.update({
-                  name: row.name || vPart.name,
-                  unit: row.unit || vPart.unit,
-                  purchase_price: row.purchase_price !== undefined ? Number(row.purchase_price) : vPart.purchase_price,
-                  selling_price: row.selling_price !== undefined ? Number(row.selling_price) : vPart.selling_price
-                }, { transaction: t });
+                const updateData = {};
+                if (row.name) updateData.name = row.name;
+                if (row.unit) updateData.unit = row.unit;
+                if (row.purchase_price !== undefined) updateData.purchase_price = Number(row.purchase_price);
+                if (row.selling_price !== undefined) updateData.selling_price = Number(row.selling_price);
+                if (row.code_type) updateData.code_type = codeType;
+                if (row.default_conversion_rate !== undefined) updateData.default_conversion_rate = Number(row.default_conversion_rate);
+                if (linkedPartId) updateData.linked_part_id = linkedPartId;
+                if (row.description) updateData.description = row.description;
+                
+                await vPart.update(updateData, { transaction: t });
               }
               results.success++;
             }
             break;
 
           case 'part_inventory':
-            if (row.code && row.warehouse_name) {
+            if (row.code && (row.warehouse_name || warehouse_id)) {
               const vPart = await Part.findOne({ where: { code: row.code }, transaction: t });
               if (!vPart) throw new Error(`Mã phụ tùng '${row.code}' không tồn tại trong danh mục.`);
 
-              const vWarehouse = await Warehouse.findOne({ where: { warehouse_name: row.warehouse_name }, transaction: t });
-              if (!vWarehouse) throw new Error(`Kho '${row.warehouse_name}' không tồn tại.`);
+              const vWarehouseId = enforcedWH || warehouseMap.get((row.warehouse_name || '').toLowerCase()) || warehouse_id;
+              if (!vWarehouseId) throw new Error(`Vui lòng xác định kho hàng.`);
 
+              const inventoryPartId = vPart.linked_part_id || vPart.id;
               const [inventory, invCreated] = await PartInventory.findOrCreate({
-                where: { part_id: vPart.id, warehouse_id: vWarehouse.id },
+                where: { part_id: inventoryPartId, warehouse_id: vWarehouseId },
                 defaults: {
                   quantity: Number(row.quantity) || 0,
-                  location: row.location || ''
                 },
                 transaction: t
               });
@@ -651,7 +700,6 @@ const importData = async (req, res) => {
               if (!invCreated) {
                 await inventory.update({
                   quantity: Number(row.quantity) || 0,
-                  location: row.location || inventory.location
                 }, { transaction: t });
               }
               results.success++;
@@ -738,7 +786,7 @@ const importData = async (req, res) => {
 
               // 4. Create PartPurchaseItem
               const qty = Number(row.quantity) || 0;
-              const unitPrice = Number(row.unit_price) || 0;
+              const unitPrice = Number(row.purchase_price) || 0;
               const totalPrice = qty * unitPrice;
               const conversion = vPart.default_conversion_rate || 1;
               const baseQty = qty * conversion;
@@ -769,6 +817,198 @@ const importData = async (req, res) => {
               const rowTotalWithVat = totalPrice + itemVatAmount;
               await vPurchase.increment('total_amount', { by: rowTotalWithVat, transaction: t });
 
+              results.success++;
+            }
+            break;
+
+          case 'part_retail_sales':
+            if (row.customer_name && row.code && row.quantity) {
+              const vWarehouseId = enforcedWH || warehouseMap.get((row.warehouse_name || '').toLowerCase()) || warehouse_id;
+              if (!vWarehouseId) throw new Error(`Vui lòng xác định kho hàng.`);
+
+              const cleanCode = String(row.code).trim().toUpperCase();
+              let vPart = partMap.get(cleanCode.toLowerCase());
+              if (!vPart) throw new Error(`Mã phụ tùng '${cleanCode}' không tồn tại.`);
+
+              const saleDate = parseImportDate(row.sale_date, detectedFormat);
+              const startDate = dayjs(saleDate).startOf('day').toDate();
+              const endDate = dayjs(saleDate).endOf('day').toDate();
+
+              // Group items from same customer on same day into one PartSale
+              let vSale = await PartSale.findOne({
+                where: {
+                  customer_name: row.customer_name,
+                  warehouse_id: vWarehouseId,
+                  sale_type: 'Retail',
+                  sale_date: { [Op.between]: [startDate, endDate] }
+                },
+                transaction: t
+              });
+
+              if (!vSale) {
+                vSale = await PartSale.create({
+                  sale_date: saleDate,
+                  customer_name: row.customer_name,
+                  customer_phone: row.phone || '',
+                  warehouse_id: vWarehouseId,
+                  sale_type: 'Retail',
+                  paid_amount: Number(row.paid_amount) || 0,
+                  vat_percent: Number(row.vat_percent) || 0,
+                  created_by: req.user.id
+                }, { transaction: t });
+              }
+
+              const qty = Number(row.quantity) || 0;
+              const unitPrice = Number(row.unit_price) || Number(vPart.selling_price) || 0;
+              const totalPrice = qty * unitPrice;
+
+              await PartSaleItem.create({
+                sale_id: vSale.id,
+                part_id: vPart.id,
+                quantity: qty,
+                unit: row.unit || vPart.unit,
+                unit_price: unitPrice,
+                total_price: totalPrice
+              }, { transaction: t });
+
+              // Update Sale Total
+              const currentTotal = Number(vSale.total_amount);
+              const newTotal = currentTotal + totalPrice;
+              // VAT is handled on the total amount in PartRetailPage, but here we store total_amount as sum of item totals then apply VAT if needed in display or just store it.
+              // Logic in PartRetailPage: totalAmount = subtotal * (1 + vatPercent / 100);
+              // We'll update the vSale.total_amount
+              await vSale.update({ total_amount: newTotal }, { transaction: t });
+
+              // Update Inventory
+              const inventoryPartId = vPart.linked_part_id || vPart.id;
+              const [inventory] = await PartInventory.findOrCreate({
+                where: { part_id: inventoryPartId, warehouse_id: vWarehouseId },
+                defaults: { quantity: 0 },
+                transaction: t
+              });
+              await inventory.decrement('quantity', { by: qty, transaction: t });
+
+              results.success++;
+            }
+            break;
+
+          case 'part_wholesale_sales':
+            if (row.customer_code && row.code && row.quantity) {
+              const vWarehouseId = enforcedWH || warehouseMap.get((row.warehouse_name || '').toLowerCase()) || warehouse_id;
+              if (!vWarehouseId) throw new Error(`Vui lòng xác định kho hàng.`);
+
+              const cleanCode = String(row.code).trim().toUpperCase();
+              let vPart = partMap.get(cleanCode.toLowerCase());
+              if (!vPart) throw new Error(`Mã phụ tùng '${cleanCode}' không tồn tại.`);
+
+              const customer = await WholesaleCustomer.findOne({ where: { customer_code: row.customer_code }, transaction: t });
+              if (!customer) throw new Error(`Đối tác buôn mã '${row.customer_code}' không tồn tại.`);
+
+              const saleDate = parseImportDate(row.sale_date, detectedFormat);
+              const startDate = dayjs(saleDate).startOf('day').toDate();
+              const endDate = dayjs(saleDate).endOf('day').toDate();
+
+              // Group items from same customer on same day into one PartSale
+              let vSale = await PartSale.findOne({
+                where: {
+                  customer_id: customer.id,
+                  warehouse_id: vWarehouseId,
+                  sale_type: 'Wholesale',
+                  sale_date: { [Op.between]: [startDate, endDate] }
+                },
+                transaction: t
+              });
+
+              if (!vSale) {
+                vSale = await PartSale.create({
+                  sale_date: saleDate,
+                  customer_id: customer.id,
+                  customer_name: customer.name,
+                  customer_phone: customer.phone,
+                  warehouse_id: vWarehouseId,
+                  sale_type: 'Wholesale',
+                  paid_amount: Number(row.paid_amount) || 0,
+                  vat_percent: Number(row.vat_percent) || 0,
+                  created_by: req.user.id
+                }, { transaction: t });
+              }
+
+              const qty = Number(row.quantity) || 0;
+              const unitPrice = Number(row.unit_price) || Number(vPart.wholesale_price || vPart.selling_price) || 0;
+              const totalPrice = qty * unitPrice;
+
+              await PartSaleItem.create({
+                sale_id: vSale.id,
+                part_id: vPart.id,
+                quantity: qty,
+                unit: row.unit || vPart.unit,
+                unit_price: unitPrice,
+                total_price: totalPrice
+              }, { transaction: t });
+
+              // Update Sale Total
+              const currentTotal = Number(vSale.total_amount);
+              const newTotal = currentTotal + totalPrice;
+              await vSale.update({ total_amount: newTotal }, { transaction: t });
+
+              // Update Inventory
+              const inventoryPartId = vPart.linked_part_id || vPart.id;
+              const [inventory] = await PartInventory.findOrCreate({
+                where: { part_id: inventoryPartId, warehouse_id: vWarehouseId },
+                defaults: { quantity: 0 },
+                transaction: t
+              });
+              await inventory.decrement('quantity', { by: qty, transaction: t });
+
+              results.success++;
+            }
+            break;
+
+          case 'expenses':
+            if (row.amount && row.content) {
+              const expenseDate = parseImportDate(row.expense_date, detectedFormat);
+              
+              let vehicleId = null;
+              if (row.engine_no || row.license_plate) {
+                const vehicle = await Vehicle.findOne({
+                  where: {
+                    [Op.or]: [
+                      row.engine_no ? { engine_no: "" + row.engine_no } : null,
+                      row.license_plate ? { license_plate: "" + row.license_plate } : null
+                    ].filter(Boolean)
+                  },
+                  transaction: t
+                });
+                if (vehicle) vehicleId = vehicle.id;
+              }
+
+              let targetWarehouseId = warehouse_id;
+              if (!targetWarehouseId && row.warehouse_name) {
+                const wh = await Warehouse.findOne({ where: { warehouse_name: { [Op.iLike]: row.warehouse_name } }, transaction: t });
+                if (wh) targetWarehouseId = wh.id;
+              }
+
+              // Permission check
+              if (req.user.role !== 'ADMIN') {
+                 if (req.user.expense_warehouses) {
+                    const warehouseIds = req.user.expense_warehouses.split(',').filter(id => id.trim() !== '');
+                    if (targetWarehouseId && !warehouseIds.includes(targetWarehouseId)) {
+                        throw new Error(`Bạn không có quyền nhập chi tiêu cho kho '${row.warehouse_name}'`);
+                    }
+                 } else if (targetWarehouseId && targetWarehouseId !== req.user.warehouse_id) {
+                     throw new Error(`Bạn không có quyền nhập chi tiêu cho kho '${row.warehouse_name}'`);
+                 }
+              }
+
+              await Expense.create({
+                expense_date: expenseDate,
+                amount: Number(row.amount),
+                content: row.content,
+                notes: row.notes || '',
+                vehicle_id: vehicleId,
+                warehouse_id: targetWarehouseId || null,
+              }, { transaction: t });
+              
               results.success++;
             }
             break;
@@ -804,7 +1044,10 @@ const importData = async (req, res) => {
             'customers': 'khách buôn',
             'part_master': 'danh mục phụ tùng',
             'part_inventory': 'tồn kho phụ tùng',
-            'part_purchases': 'nhập phụ tùng'
+            'part_retail_sales': 'đơn bán lẻ phụ tùng',
+            'part_wholesale_sales': 'đơn bán buôn phụ tùng',
+            'part_purchases': 'nhập phụ tùng',
+            'expenses': 'danh sách chi tiêu'
         };
         await sendNotification(req, {
             title: `📥 Import Excel: ${typeLabels[type] || type}`,
@@ -844,9 +1087,12 @@ const downloadTemplate = async (req, res) => {
             purchases: ['Số máy', 'Số khung', 'Loại xe', 'Màu sắc', 'Giá nhập', 'Tên NCC', 'Tên kho', 'Ngày nhập'],
             retail_sales: ['Ngày bán', 'Số máy', 'Tên khách', 'Ngày sinh', 'Số điện thoại', 'Địa chỉ', 'Số CMT/CCCD', 'Giới tính', 'Giá bán', 'Tiền khách trả', 'Hình thức TT', 'Kiểu bán', 'Người bảo lãnh', 'SĐT người bảo lãnh', 'Tên ngân hàng', 'Số hợp đồng', 'Số tiền vay', 'Quà tặng', 'Người bán', 'Tên kho', 'Phát sổ bảo hành'],
             wholesale_sales: ['Ngày bán', 'Số máy', 'Mã khách hàng', 'Giá bán lẻ', 'Đã trả', 'Hình thức TT', 'Tên kho'],
-            part_master: ['Mã phụ tùng', 'Tên phụ tùng', 'Đơn vị tính', 'Giá nhập', 'Giá bán'],
-            part_inventory: ['Mã phụ tùng', 'Số lượng tồn', 'Kho', 'Vị trí'],
-            part_purchases: ['SỐ PO', 'SỐ HOÁ ĐƠN HVN', 'MÃ PHỤ TÙNG', 'TÊN PHỤ TÙNG', 'SỐ LƯỢNG', 'DNP', 'THÀNH TIỀN CHƯA VAT', 'VAT', 'VAT THÀNH TIỀN', 'NGÀY NHẬP', 'TÊN KHO', 'TÊN NCC']
+            part_master: ['Mã phụ tùng', 'Tên phụ tùng', 'Đơn vị tính', 'Giá nhập', 'Giá bán', 'Phân loại mã', 'Tỷ lệ quy đổi', 'Mã liên kết', 'Mô tả'],
+            part_inventory: ['Mã phụ tùng', 'Số lượng tồn', 'Kho'],
+            part_retail_sales: ['Ngày bán', 'Tên khách', 'Số điện thoại', 'Mã PT', 'Số lượng', 'Đơn giá', 'Đã trả', 'VAT (%)', 'Tên kho'],
+            part_wholesale_sales: ['Ngày bán', 'Mã khách hàng', 'Mã PT', 'Số lượng', 'Giá sỉ', 'Đã trả', 'VAT (%)', 'Tên kho'],
+            part_purchases: ['SỐ PO', 'SỐ HOÁ ĐƠN HVN', 'MÃ PHỤ TÙNG', 'TÊN PHỤ TÙNG', 'SỐ LƯỢNG', 'DNP', 'THÀNH TIỀN CHƯA VAT', 'VAT', 'VAT THÀNH TIỀN', 'NGÀY NHẬP', 'TÊN KHO', 'TÊN NCC'],
+            expenses: ['Ngày chi', 'Số tiền', 'Nội dung chi', 'Ghi chú', 'Số máy', 'Tên kho']
         };
 
         const headers = templateColumns[type] || [];
@@ -861,6 +1107,19 @@ const downloadTemplate = async (req, res) => {
         // Auto height & width for header
         mainSheet.columns = headers.map(h => ({ header: h, key: h, width: 20 }));
 
+        const effectiveWarehouseId = warehouse_id || (req.user.role === 'STAFF' ? req.user.warehouse_id : null);
+
+        // Conditional Part filtering: for sales imports, only show parts with stock in the target warehouse
+        const partsQuery = { attributes: ['code', 'name', 'unit', 'purchase_price'], order: [['code', 'ASC']] };
+        const sellingTypes = ['retail_sales', 'wholesale_sales', 'part_retail_sales', 'part_wholesale_sales', 'part_inventory'];
+        if (sellingTypes.includes(type) && effectiveWarehouseId) {
+            partsQuery.include = [{
+                model: PartInventory,
+                where: { warehouse_id: effectiveWarehouseId, quantity: { [Op.gt]: 0 } },
+                required: true
+            }];
+        }
+
         // POPULATE DROPDOWNS IF NECESSARY
         const [types, colors, suppliers, warehouses, customers, parts, allUsers, allGifts] = await Promise.all([
             VehicleType.findAll({ attributes: ['name'], order: [['name', 'ASC']] }),
@@ -868,12 +1127,11 @@ const downloadTemplate = async (req, res) => {
             Supplier.findAll({ attributes: ['name'], order: [['name', 'ASC']] }),
             Warehouse.findAll({ attributes: ['warehouse_name', 'id'], order: [['warehouse_name', 'ASC']] }),
             WholesaleCustomer.findAll({ attributes: ['customer_code'], order: [['customer_code', 'ASC']] }),
-            Part.findAll({ attributes: ['code', 'name', 'unit', 'purchase_price'], order: [['code', 'ASC']] }),
+            Part.findAll(partsQuery),
             User.findAll({ attributes: ['full_name'], order: [['full_name', 'ASC']] }),
             Gift.findAll({ attributes: ['name'], order: [['name', 'ASC']] })
         ]);
 
-        const effectiveWarehouseId = warehouse_id || (req.user.role === 'STAFF' ? req.user.warehouse_id : null);
         const engineWhere = { status: 'In Stock' };
         if (effectiveWarehouseId) {
             engineWhere.warehouse_id = effectiveWarehouseId;
@@ -926,6 +1184,8 @@ const downloadTemplate = async (req, res) => {
         genderOptions.forEach((v, i) => dataSheet.getCell(i + 1, 15).value = v);
         saleTypes.forEach((v, i) => dataSheet.getCell(i + 1, 16).value = v);
         userValues.forEach((v, i) => dataSheet.getCell(i + 1, 17).value = v);
+        const codeTypeValues = ['HONDA', 'SELF_CREATED'];
+        codeTypeValues.forEach((v, i) => dataSheet.getCell(i + 1, 18).value = v);
 
         // Validation mapping: { HeaderName: { sourceColLetter, isSearchable, valuesCount } }
         const validationConfigs = {
@@ -954,13 +1214,24 @@ const downloadTemplate = async (req, res) => {
                 'Mã phụ tùng': { col: 'F', search: true }, 
                 'Kho': { col: 'D', search: true } 
             },
+            part_retail_sales: {
+                'Mã PT': { col: 'F', search: true },
+                'Tên kho': { col: 'D', search: true }
+            },
+            part_wholesale_sales: {
+                'Mã PT': { col: 'F', search: true },
+                'Tên kho': { col: 'D', search: true },
+                'Mã khách hàng': { col: 'E', search: true }
+            },
             part_purchases: { 
                 'MÃ PHỤ TÙNG': { col: 'F', search: true },
                 'TÊN KHO': { col: 'D', search: true },
                 'TÊN NCC': { col: 'C', search: true }
             },
             part_master: {
-                'Đơn vị tính': { col: 'K', search: false, count: units.length }
+                'Đơn vị tính': { col: 'K', search: false, count: units.length },
+                'Phân loại mã': { col: 'R', search: false, count: 2 },
+                'Mã liên kết': { col: 'F', search: true }
             },
             types: { 
                 'Phân loại': { col: 'J', search: false, count: vehicleClasses.length }
@@ -970,6 +1241,10 @@ const downloadTemplate = async (req, res) => {
             },
             customers: {
                 'Hình thức TT': { col: 'H', search: false, count: paymentMethods.length }
+            },
+            expenses: {
+                'Số máy': { col: 'G', search: true },
+                'Tên kho': { col: 'D', search: true }
             }
         };
 

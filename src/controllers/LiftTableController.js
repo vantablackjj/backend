@@ -7,7 +7,13 @@ const getLiftTables = async (req, res) => {
   try {
     const { warehouse_id } = req.query;
     const where = {};
-    if (warehouse_id) where.warehouse_id = warehouse_id;
+    
+    // Ràng buộc dữ liệu: Nếu không phải ADMIN, chỉ được xem bàn nâng của kho mình
+    if (req.user.role !== 'ADMIN') {
+        where.warehouse_id = req.user.warehouse_id;
+    } else if (warehouse_id) {
+        where.warehouse_id = warehouse_id;
+    }
 
     const liftTables = await LiftTable.findAll({
       where,
@@ -17,7 +23,7 @@ const getLiftTables = async (req, res) => {
           model: MaintenanceOrder,
           where: { status: { [Op.in]: ['PENDING', 'IN_PROGRESS'] } },
           required: false,
-          attributes: ['id', 'status', 'license_plate', 'customer_name']
+          attributes: ['id', 'status', 'license_plate', 'customer_name', 'mechanic_1_id', 'mechanic_2_id', 'createdAt']
         }
       ],
       order: [['name', 'ASC']]

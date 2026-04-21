@@ -1,19 +1,19 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const GiftController = require('../controllers/GiftController');
+const GiftController = require("../controllers/GiftController");
 
 // Gift Master Data
-router.get('/', GiftController.getAllGifts);
-router.post('/', GiftController.createGift);
-router.put('/:id', GiftController.updateGift);
-router.delete('/:id', GiftController.deleteGift);
+router.get("/", GiftController.getAllGifts);
+router.post("/", GiftController.createGift);
+router.put("/:id", GiftController.updateGift);
+router.delete("/:id", GiftController.deleteGift);
 
 // Gift Inventory
-router.get('/inventory', GiftController.getGiftInventory);
+router.get("/inventory", GiftController.getGiftInventory);
 
 // Gift Transactions (Diary)
-router.get('/transactions', GiftController.getTransactions);
-router.post('/import', GiftController.importGifts);
-router.post('/export', GiftController.exportGifts);
+router.get("/transactions", GiftController.getTransactions);
+router.post("/import", GiftController.importGifts);
+router.post("/export", GiftController.exportGifts);
 
 module.exports = router;

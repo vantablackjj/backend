@@ -110,7 +110,8 @@ exports.importGifts = async (req, res) => {
             type: 'IMPORT',
             transaction_date: transaction_date || new Date(),
             notes,
-            created_by: req.user.id
+            created_by: req.user.id,
+            price: req.body.price || (await Gift.findByPk(gift_id))?.price || 0
         }, { transaction: t });
 
         const [inventory, created] = await GiftInventory.findOrCreate({
@@ -156,7 +157,8 @@ exports.exportGifts = async (req, res) => {
             transaction_date: transaction_date || new Date(),
             event_name,
             notes,
-            created_by: req.user.id
+            created_by: req.user.id,
+            price: (await Gift.findByPk(gift_id))?.price || 0
         }, { transaction: t });
 
         await inventory.decrement('quantity', { by: quantity, transaction: t });

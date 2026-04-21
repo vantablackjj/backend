@@ -1,11 +1,31 @@
 const Mechanic = require('../models/Mechanic');
 
+const MaintenanceOrder = require('../models/MaintenanceOrder');
+const { Op } = require('sequelize');
+
 exports.getAll = async (req, res) => {
   try {
     const mechanics = await Mechanic.findAll({
       order: [['mechanic_name', 'ASC']]
     });
-    res.json(mechanics);
+
+    const activeOrders = await MaintenanceOrder.findAll({
+      where: { status: { [Op.in]: ['PENDING', 'IN_PROGRESS'] } },
+      attributes: ['mechanic_1_id', 'mechanic_2_id']
+    });
+
+    const busyIds = new Set();
+    activeOrders.forEach(o => {
+        if (o.mechanic_1_id) busyIds.add(o.mechanic_1_id);
+        if (o.mechanic_2_id) busyIds.add(o.mechanic_2_id);
+    });
+
+    const result = mechanics.map(m => ({
+        ...m.toJSON(),
+        is_busy: busyIds.has(m.id)
+    }));
+
+    res.json(result);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

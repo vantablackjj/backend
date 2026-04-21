@@ -11,15 +11,15 @@ const vehicleController = require('../controllers/VehicleController');
 const retailPaymentController = require('../controllers/RetailPaymentController');
 const Vehicle = require('../models/Vehicle');
 
-const { isAdmin, canManageDebt, canDelete, canManageMoney, canManageExpenses } = require('../middleware/authMiddleware');
+const { isAdmin, canManageDebt, canDelete, canManageMoney, canManageExpenses, canManageSales, canManageVehicles } = require('../middleware/authMiddleware');
 
 // Retail Sales
-router.get('/retail-sales', retailController.getAll);
-router.get('/search-sold-vehicles', retailController.searchVehicle);
-router.post('/retail-sales', retailController.create);
+router.get('/retail-sales', canManageSales, retailController.getAll);
+router.get('/search-sold-vehicles', canManageSales, retailController.searchVehicle);
+router.post('/retail-sales', canManageSales, retailController.create);
 router.delete('/retail-sales/:id', canDelete, retailController.delete);
 router.put('/retail-sales/:id/disbursement', canManageMoney, retailController.updateDisbursement);
-router.put('/retail-sales/:id/guarantee-book', retailController.updateGuaranteeBook);
+router.put('/retail-sales/:id/guarantee-book', canManageSales, retailController.updateGuaranteeBook);
 router.get('/retail-sales/:id/payments', retailPaymentController.getPaymentsBySale); // Get all payments for a sale
 router.post('/retail-payments', canManageMoney, retailPaymentController.addPayment); // Add a new payment
 router.delete('/retail-payments/:id', canManageMoney, retailPaymentController.deletePayment); // Delete a payment record
@@ -41,9 +41,9 @@ router.put('/purchases/:id/bulk-fix-codes', isAdmin, purchaseController.bulkFixC
 router.put('/purchases/:id', purchaseController.updatePurchase);
 
 // Wholesale Sales
-router.get('/wholesale-sales', wholesaleController.getByCustomer);
-router.post('/wholesale-sales', wholesaleController.createSale);
-router.get('/wholesale-sales/:id/details', wholesaleController.getSaleDetails);
+router.get('/wholesale-sales', canManageSales, wholesaleController.getByCustomer);
+router.post('/wholesale-sales', canManageSales, wholesaleController.createSale);
+router.get('/wholesale-sales/:id/details', canManageSales, wholesaleController.getSaleDetails);
 router.post('/wholesale-sales/payment', canManageMoney, wholesaleController.addPayment);
 router.delete('/wholesale-payments/:id', canManageMoney, wholesaleController.deletePayment);
 router.delete('/wholesale-sales/:id', canDelete, wholesaleController.deleteSale);
@@ -55,8 +55,8 @@ router.get('/inventory/check', inventoryController.getByEngineNo);
 
 
 // Vehicles
-router.get('/vehicles', vehicleController.getAll);
-router.get('/vehicles/:id', vehicleController.getById);
+router.get('/vehicles', canManageVehicles, vehicleController.getAll);
+router.get('/vehicles/:id', canManageVehicles, vehicleController.getById);
 router.delete('/vehicles/:id', isAdmin, vehicleController.delete);
 
 // Transfer
@@ -79,6 +79,8 @@ router.get('/vehicles-in-warehouse/:warehouse_id', async (req, res) => {
     try {
         const { warehouse_id } = req.params;
         const { include_transfer_id } = req.query;
+
+        // Note: For inventory-checking/transfer-request purposes, we allow viewing other warehouses
 
         let selectedIds = [];
         if (include_transfer_id) {

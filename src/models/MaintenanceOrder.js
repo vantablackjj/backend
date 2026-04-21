@@ -97,6 +97,10 @@ const MaintenanceOrder = sequelize.define('MaintenanceOrder', {
   status: {
     type: DataTypes.ENUM('PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'),
     defaultValue: 'PENDING'
+  },
+  gift_used: {
+    type: DataTypes.STRING,
+    allowNull: true
   }
 }, {
   timestamps: true

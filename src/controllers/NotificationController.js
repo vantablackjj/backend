@@ -9,9 +9,39 @@ exports.getAll = async (req, res) => {
     
     // Role-based filtering: 
     // ADMIN sees all. 
-    // STAFF sees their warehouse notifications.
+    // STAFF sees their warehouse notifications AND filtered categories.
     if (req.user.role !== 'ADMIN') {
         where.warehouse_id = req.user.warehouse_id;
+
+        // Granular permission filtering
+        const allowedTypes = ['SYSTEM', 'INFO', 'IMPORT_EXCEL']; // Default public types
+        
+        if (req.user.can_manage_sales) {
+            allowedTypes.push(
+                'RETAIL_SALE', 
+                'WHOLESALE_SALE', 
+                'TRANSFER_REQUEST', 
+                'TRANSFER_APPROVED', 
+                'TRANSFER_RECEIVED',
+                'PURCHASE' // Vehicle purchase
+            );
+        }
+        
+        if (req.user.can_manage_spare_parts) {
+            allowedTypes.push(
+                'LOW_STOCK', 
+                'PART_TRANSFER', 
+                'PART_PURCHASE'
+            );
+        }
+
+        if (req.user.can_manage_expenses) {
+            allowedTypes.push('EXPENSE');
+        }
+
+        // Apply type filtering
+        const { Op } = require('sequelize');
+        where.type = { [Op.in]: allowedTypes };
     }
 
     const { is_read } = req.query;

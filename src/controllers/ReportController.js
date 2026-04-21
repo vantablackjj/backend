@@ -21,6 +21,8 @@ const PartPurchase = require('../models/PartPurchase');
 const PartPurchaseItem = require('../models/PartPurchaseItem');
 const PartSale = require('../models/PartSale');
 const PartSaleItem = require('../models/PartSaleItem');
+const MaintenanceOrder = require('../models/MaintenanceOrder');
+const MaintenanceItem = require('../models/MaintenanceItem');
 const sequelize = require('../config/database');
 const { Op } = require('sequelize');
 const dayjs = require('dayjs');
@@ -138,7 +140,25 @@ exports.getVehicleLifecycle = async (req, res) => {
         }
 
         // Sắp xếp theo ngày tháng
-        lifecycle.sort((a, b) => new Date(a.date) - new Date(b.date));
+        // Nếu cùng ngày (không tính giờ), ưu tiên thứ tự: PURCHASE -> TRANSFER -> SALE
+        const typePriority = {
+            'PURCHASE': 1,
+            'TRANSFER': 2,
+            'SALE_RETAIL': 3,
+            'SALE_WHOLESALE': 4
+        };
+
+        lifecycle.sort((a, b) => {
+            const dateA = new Date(a.date);
+            const dateB = new Date(b.date);
+            
+            if (dateA.getTime() !== dateB.getTime()) {
+                return dateA - dateB;
+            }
+            
+            // Nếu cùng thời điểm (hoặc cùng ngày đối với date-only values)
+            return (typePriority[a.type] || 9) - (typePriority[b.type] || 9);
+        });
 
         res.json({
             vehicle,
@@ -803,26 +823,56 @@ exports.getDailyReport = async (req, res) => {
         // 5. EXPENSES
         const expensesTotal = await Expense.sum('amount', { where: expenseWhere });
 
+        // 6. MAINTENANCE SUMMARY
+        let maintenanceDateWhere = sequelize.where(sequelize.fn('date', sequelize.fn('timezone', tz, sequelize.col('maintenance_date'))), dateStr);
+        if (targetWH) maintenanceDateWhere = { [Op.and]: [maintenanceDateWhere, { warehouse_id: targetWH }] };
+
+        const maintenanceOrders = await MaintenanceOrder.findAll({
+            where: maintenanceDateWhere,
+            include: [{ model: MaintenanceItem }]
+        });
+
+        const maintenanceRevenue = maintenanceOrders.reduce((sum, o) => sum + Number(o.total_amount || 0), 0);
+        const maintenanceCount = maintenanceOrders.length;
+        
+        let promoCost = 0;
+        let warrantyCost = 0;
+        maintenanceOrders.forEach(o => {
+            o.MaintenanceItems?.forEach(item => {
+                const cost = Number(item.purchase_price || 0) * Number(item.quantity || 0);
+                if (item.sale_type === 'KHUYEN_MAI') promoCost += cost;
+                if (item.sale_type === 'BAO_HANH') warrantyCost += cost;
+            });
+        });
+
+        // 7. COLLECTIONS (Cash In) - Update to include maintenance
+        const maintenancePaid = maintenanceOrders.reduce((sum, o) => sum + Number(o.paid_amount || 0), 0);
+        const totalCollections = collections + maintenancePaid;
+
         res.json({
-            date: targetDate.format('YYYY-MM-DD'),
+            date: dateStr,
             metrics: {
-                totalRevenue: retailRevenue + wholesaleRevenue,
+                totalRevenue: retailRevenue + wholesaleRevenue + maintenanceRevenue,
                 retailRevenue,
                 wholesaleRevenue,
+                maintenanceRevenue,
                 retailCount,
                 wholesaleCount,
+                maintenanceCount,
+                promoCost,
+                warrantyCost,
                 giftDistribution: retailSales.reduce((acc, s) => {
                     if (s.gifts && Array.isArray(s.gifts)) {
                         s.gifts.forEach(g => acc[g] = (acc[g] || 0) + 1);
                     }
                     return acc;
                 }, {}),
-                totalIncome: collections,
+                totalIncome: totalCollections,
                 totalOutcome: outflow + (expensesTotal || 0),
-                collections,
+                collections: totalCollections,
                 purchasesPaid: outflow,
                 expenses: expensesTotal || 0,
-                netCashFlow: collections - (outflow + (expensesTotal || 0))
+                netCashFlow: totalCollections - (outflow + (expensesTotal || 0))
             }
         });
 
@@ -877,17 +927,24 @@ exports.getPartInventoryReport = async (req, res) => {
             
             for (const part of parts) {
                 // Determine which part ID holds the actual stock
+                const isParent = !!part.linked_part_id;
                 const actualStockPartId = part.linked_part_id || part.id;
                 const conversion = part.default_conversion_rate || 1;
                 
                 const stockRecord = inventoryMap.get(`${actualStockPartId}_${warehouseId}`);
-                if (!stockRecord && !warehouse_id) continue; // Skip if no stock and looking at global
+                let rawQty = Number(stockRecord?.quantity || 0);
 
-                // Calculate virtual quantity in the current part's unit
-                const rawQty = Number(stockRecord?.quantity || 0);
-                const displayQty = part.linked_part_id ? (rawQty / conversion) : rawQty;
+                // Nếu có tồn kho "nhầm" ở mã cha (ví dụ thùng), cộng dồn vào mã con (chai) để hiển thị tổng
+                if (isParent) {
+                    const parentStockRecord = inventoryMap.get(`${part.id}_${warehouseId}`);
+                    if (parentStockRecord) {
+                        rawQty += Number(parentStockRecord.quantity) * conversion;
+                    }
+                }
 
-                if (displayQty > 0 || warehouse_id) { // Show all if filtered by warehouse, else only those with stock
+                const displayQty = isParent ? (rawQty / conversion) : rawQty;
+                
+                if (displayQty > 0 || warehouse_id) { 
                     reportInventory.push({
                         id: `${part.id}_${warehouseId}`,
                         part_id: part.id,
@@ -964,14 +1021,76 @@ exports.getPartPurchasesReport = async (req, res) => {
     }
 };
 
+exports.getPartImportSummaryReport = async (req, res) => {
+    try {
+        const { from_date, to_date, supplier_id, warehouse_id, query } = req.query;
+        let purchaseWhere = {};
+        
+        if (from_date && to_date) {
+            purchaseWhere.purchase_date = { [Op.between]: [dayjs(from_date).startOf('day').toDate(), dayjs(to_date).endOf('day').toDate()] };
+        }
+        if (supplier_id) purchaseWhere.supplier_id = supplier_id;
+
+        const targetWH = warehouse_id || (req.user.role !== 'ADMIN' ? req.user.warehouse_id : null);
+        if (targetWH) purchaseWhere.warehouse_id = targetWH;
+
+        let partFilter = query ? {
+            [Op.or]: [
+                { code: { [Op.iLike]: `%${query}%` } },
+                { name: { [Op.iLike]: `%${query}%` } }
+            ]
+        } : undefined;
+
+        const items = await PartPurchaseItem.findAll({
+            include: [
+                { 
+                    model: PartPurchase, 
+                    where: purchaseWhere,
+                    attributes: ['purchase_date', 'supplier_id', 'warehouse_id']
+                },
+                { 
+                    model: Part, 
+                    attributes: ['code', 'name', 'unit'],
+                    where: partFilter,
+                    required: !!query
+                }
+            ]
+        });
+
+        const reportMap = {};
+        items.forEach(item => {
+            const partId = item.part_id;
+            if (!reportMap[partId]) {
+                reportMap[partId] = {
+                    code: item.Part?.code || 'N/A',
+                    name: item.Part?.name || 'N/A',
+                    unit: item.Part?.unit || 'N/A',
+                    total_qty: 0,
+                    total_amount: 0,
+                    purchase_count: 0
+                };
+            }
+            reportMap[partId].total_qty += Number(item.quantity || 0);
+            reportMap[partId].total_amount += Number(item.total_price || 0);
+            reportMap[partId].purchase_count += 1;
+        });
+
+        res.json(Object.values(reportMap).sort((a,b) => a.code.localeCompare(b.code)));
+    } catch (e) {
+        res.status(500).json({ message: e.message });
+    }
+};
+
 exports.getPartSalesReport = async (req, res) => {
     try {
-        const { from_date, to_date, warehouse_id, query } = req.query;
+        const { from_date, to_date, warehouse_id, query, sale_type } = req.query;
         let where = {};
 
         if (from_date && to_date) {
             where.sale_date = { [Op.between]: [dayjs(from_date).startOf('day').toDate(), dayjs(to_date).endOf('day').toDate()] };
         }
+
+        if (sale_type) where.sale_type = sale_type;
 
         const targetWH = warehouse_id || (req.user.role !== 'ADMIN' ? req.user.warehouse_id : null);
         if (targetWH) where.warehouse_id = targetWH;
@@ -994,7 +1113,7 @@ exports.getPartSalesReport = async (req, res) => {
             where,
             include: [
                 { model: Warehouse, attributes: ['warehouse_name'] },
-                { model: User, as: 'seller', attributes: ['full_name'] },
+                { model: User, as: 'creator', attributes: ['full_name'] },
                 { 
                     model: PartSaleItem, 
                     where: Object.keys(itemWhere).length > 0 ? itemWhere : undefined,
@@ -1006,6 +1125,115 @@ exports.getPartSalesReport = async (req, res) => {
         });
 
         res.json(sales);
+    } catch (e) {
+        res.status(500).json({ message: e.message });
+    }
+};
+
+exports.getPartUsageReport = async (req, res) => {
+    try {
+        const { from_date, to_date, warehouse_id, query } = req.query;
+        const tz = 'Asia/Ho_Chi_Minh';
+
+        let maintenanceConds = [{ type: 'PART' }];
+        let saleConds = [];
+
+        if (from_date && to_date) {
+            maintenanceConds.push(sequelize.where(
+                sequelize.fn('date', sequelize.fn('timezone', tz, sequelize.col('MaintenanceOrder.maintenance_date'))),
+                { [Op.between]: [from_date, to_date] }
+            ));
+            saleConds.push(sequelize.where(
+                sequelize.fn('date', sequelize.fn('timezone', tz, sequelize.col('PartSale.sale_date'))),
+                { [Op.between]: [from_date, to_date] }
+            ));
+        }
+
+        const targetWH = warehouse_id || (req.user.role !== 'ADMIN' ? req.user.warehouse_id : null);
+        if (targetWH) {
+            maintenanceConds.push({ '$MaintenanceOrder.warehouse_id$': targetWH });
+            saleConds.push({ '$PartSale.warehouse_id$': targetWH });
+        }
+
+        const partFilter = query ? {
+            [Op.or]: [
+                { code: { [Op.iLike]: `%${query}%` } },
+                { name: { [Op.iLike]: `%${query}%` } }
+            ]
+        } : undefined;
+
+        const maintenanceItems = await MaintenanceItem.findAll({
+            where: { [Op.and]: maintenanceConds },
+            include: [
+                { model: MaintenanceOrder, attributes: ['warehouse_id'] },
+                { 
+                    model: Part, 
+                    attributes: ['code', 'name', 'unit'],
+                    where: partFilter,
+                    required: !!query
+                }
+            ]
+        });
+
+        const saleItems = await PartSaleItem.findAll({
+            where: saleConds.length > 0 ? { [Op.and]: saleConds } : {},
+            include: [
+                { model: PartSale, attributes: ['warehouse_id'] },
+                { 
+                    model: Part, 
+                    attributes: ['code', 'name', 'unit'],
+                    where: partFilter,
+                    required: !!query
+                }
+            ]
+        });
+
+        const reportMap = {};
+
+        const processItem = (item) => {
+            const partId = item.part_id;
+            const partCode = item.Part?.code || 'N/A';
+            if (!reportMap[partId]) {
+                reportMap[partId] = {
+                    code: partCode,
+                    name: item.Part?.name || 'N/A',
+                    unit: item.Part?.unit || item.unit,
+                    total_qty: 0,
+                    thu_ngay_qty: 0,
+                    bao_hanh_qty: 0,
+                    khuyen_mai_qty: 0,
+                    thu_ngay_amount: 0,
+                    bao_hanh_amount: 0,
+                    khuyen_mai_amount: 0
+                };
+            }
+
+            const qty = Number(item.quantity || 0);
+            const sale_type = item.sale_type || 'THU_NGAY';
+            const unit_price = Number(item.unit_price || 0);
+            const purchase_price = Number(item.purchase_price || 0);
+
+            reportMap[partId].total_qty += qty;
+            
+            if (sale_type === 'THU_NGAY') {
+                reportMap[partId].thu_ngay_qty += qty;
+                reportMap[partId].thu_ngay_amount += qty * unit_price;
+            } else if (sale_type === 'BAO_HANH') {
+                reportMap[partId].bao_hanh_qty += qty;
+                reportMap[partId].bao_hanh_amount += qty * purchase_price;
+            } else if (sale_type === 'KHUYEN_MAI') {
+                reportMap[partId].khuyen_mai_qty += qty;
+                reportMap[partId].khuyen_mai_amount += qty * purchase_price;
+            }
+        };
+
+        maintenanceItems.forEach(item => processItem(item));
+        saleItems.forEach(item => {
+            processItem({ ...item.get(), sale_type: 'THU_NGAY', purchase_price: 0 });
+        });
+
+        res.json(Object.values(reportMap).sort((a,b) => a.code.localeCompare(b.code)));
+
     } catch (e) {
         res.status(500).json({ message: e.message });
     }

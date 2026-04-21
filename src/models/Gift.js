@@ -19,6 +19,10 @@ const Gift = sequelize.define('Gift', {
   description: {
     type: DataTypes.TEXT,
     allowNull: true
+  },
+  price: {
+    type: DataTypes.DECIMAL(15, 2),
+    defaultValue: 0
   }
 }, {
   timestamps: true

@@ -6,6 +6,11 @@ const Warehouse = require('../models/Warehouse');
 const Expense = require('../models/Expense');
 const { Op } = require('sequelize');
 const sequelize = require('../config/database');
+const PartSale = require('../models/PartSale');
+const PartPurchase = require('../models/PartPurchase');
+const PartInventory = require('../models/PartInventory');
+const MaintenanceOrder = require('../models/MaintenanceOrder');
+const MaintenanceItem = require('../models/MaintenanceItem');
 
 exports.getStats = async (req, res) => {
     try {
@@ -104,7 +109,61 @@ exports.getStats = async (req, res) => {
             }
         });
 
-        const totalRevenue = (Number(retailStats?.revenue) || 0) + (Number(wholesaleStats?.revenue) || 0);
+        // 9. Phụ tùng - Doanh thu bán lẻ & buôn
+        let partSaleSpecificWhere = { sale_date: { [Op.between]: [start, end] } };
+        if (warehouse_id) partSaleSpecificWhere.warehouse_id = warehouse_id;
+
+        const partSaleStats = await PartSale.findOne({
+            where: partSaleSpecificWhere,
+            attributes: [
+                [sequelize.fn('COUNT', sequelize.col('id')), 'count'],
+                [sequelize.fn('SUM', sequelize.col('total_amount')), 'revenue']
+            ],
+            raw: true
+        });
+
+        // 10. Phụ tùng - Nhập hàng
+        let partPurchaseSpecificWhere = { purchase_date: { [Op.between]: [start, end] } };
+        if (warehouse_id) partPurchaseSpecificWhere.warehouse_id = warehouse_id;
+
+        const partPurchaseStats = await PartPurchase.findOne({
+            where: partPurchaseSpecificWhere,
+            attributes: [
+                [sequelize.fn('COUNT', sequelize.col('id')), 'count'],
+                [sequelize.fn('SUM', sequelize.col('total_amount')), 'spent']
+            ],
+            raw: true
+        });
+
+        // 11. Dịch vụ sửa chữa (Maintenance)
+        let mainSpecificWhere = { 
+            maintenance_date: { [Op.between]: [start, end] },
+            status: 'COMPLETED'
+        };
+        if (warehouse_id) mainSpecificWhere.warehouse_id = warehouse_id;
+
+        const maintenanceStats = await MaintenanceOrder.findOne({
+            where: mainSpecificWhere,
+            attributes: [
+                [sequelize.fn('COUNT', sequelize.col('id')), 'count'],
+                [sequelize.fn('SUM', sequelize.col('total_amount')), 'revenue']
+            ],
+            raw: true
+        });
+
+        // 12. Tồn kho phụ tùng (Số lượng mã hàng còn tồn)
+        const partInventoryCount = await PartInventory.count({
+            where: { 
+                ...(warehouse_id ? { warehouse_id } : {}),
+                quantity: { [Op.gt]: 0 }
+            }
+        });
+
+        const totalRevenue = (Number(retailStats?.revenue) || 0) + 
+                             (Number(wholesaleStats?.revenue) || 0) + 
+                             (Number(partSaleStats?.revenue) || 0) + 
+                             (Number(maintenanceStats?.revenue) || 0);
+
         const totalCOGS = retailCOGS + wholesaleCOGS;
         const totalProfit = totalRevenue - totalCOGS - (Number(otherExpenses) || 0);
 
@@ -112,6 +171,12 @@ exports.getStats = async (req, res) => {
             retail: { ...retailStats, cogs: retailCOGS },
             wholesale: { ...wholesaleStats, cogs: wholesaleCOGS },
             purchase: purchaseStats,
+            parts: {
+                sales: partSaleStats,
+                purchase: partPurchaseStats,
+                inventoryCount: partInventoryCount
+            },
+            maintenance: maintenanceStats,
             expenses: otherExpenses || 0,
             inventorySize,
             agingVehicles,

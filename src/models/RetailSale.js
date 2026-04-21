@@ -123,6 +123,11 @@ const RetailSale = sequelize.define('RetailSale', {
     type: DataTypes.JSON,
     allowNull: true,
     defaultValue: []
+  },
+  used_gifts: {
+    type: DataTypes.JSON,
+    allowNull: true,
+    defaultValue: []
   }
 
 }, {

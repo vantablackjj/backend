@@ -1,8 +1,21 @@
 const WholesaleCustomer = require('../models/WholesaleCustomer');
+const { Op } = require('sequelize');
 
 exports.getAll = async (req, res) => {
   try {
-    const list = await WholesaleCustomer.findAll({ order: [['createdAt', 'DESC']] });
+    const { type } = req.query;
+    const where = {};
+    if (type) {
+      if (type === 'PART') {
+        where.customer_type = { [Op.in]: ['PART', 'BOTH'] };
+      } else if (type === 'VEHICLE') {
+        where.customer_type = { [Op.in]: ['VEHICLE', 'BOTH'] };
+      }
+    }
+    const list = await WholesaleCustomer.findAll({ 
+      where,
+      order: [['createdAt', 'DESC']] 
+    });
     res.json(list);
   } catch (error) {
     res.status(500).json({ message: error.message });

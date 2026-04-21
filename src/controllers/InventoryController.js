@@ -7,14 +7,12 @@ exports.getAvailable = async (req, res) => {
   try {
     let where = { status: "In Stock", is_locked: false };
 
-    // Nếu không phải ADMIN, chỉ thấy xe tại kho của mình
-    // XÁC ĐỊNH BỘ LỌC KHO (Source of Truth)
+    // Nếu là quan sát tồn kho để xin chuyển, cho phép xem kho khác
     const queryWH = req.query.warehouse_id;
-    if (req.user.role === "ADMIN") {
-      if (queryWH) where.warehouse_id = queryWH;
-    } else {
-      // NHÂN VIÊN: Ép buộc dùng kho của chính mình, không cho phép gửi warehouse_id qua query
-      where.warehouse_id = req.user.warehouse_id;
+    if (queryWH) {
+        where.warehouse_id = queryWH;
+    } else if (req.user.role !== "ADMIN") {
+        where.warehouse_id = req.user.warehouse_id;
     }
 
     const list = await Vehicle.findAll({

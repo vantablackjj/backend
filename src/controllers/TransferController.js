@@ -208,13 +208,18 @@ exports.receiveTransfer = async (req, res) => {
         for (const item of items) {
             const vehicle = await Vehicle.findByPk(item.vehicle_id);
             if (vehicle) {
-                vehicle.warehouse_id = transfer.to_warehouse_id;
-                // CHỈ cập nhật về 'In Stock' nếu xe ĐANG ở trạng thái 'Transferring'
-                // Nếu xe đã bị can thiệp sang 'Sold' hoặc trạng thái khác, ta giữ nguyên trạng thái đó
+                // BUG FIX: Only update location/status if the vehicle is actually part of the transfer flow.
+                // If it was already sold (via a concurrent or back-dated process), we should NOT move its logical location.
                 if (vehicle.status === 'Transferring') {
+                    vehicle.warehouse_id = transfer.to_warehouse_id;
                     vehicle.status = 'In Stock';
+                } else if (vehicle.status === 'Sold') {
+                    // If it's sold, we keep its status. We should also probably keep its warehouse as where it was sold from.
+                    // But we MUST unlock it so it's not stuck.
+                    console.log(`[Transfer] Vehicle ${vehicle.engine_no} was already sold. Keeping status.`);
                 }
-                vehicle.is_locked = false; // Luôn mở khóa khi kết thúc phiếu
+                
+                vehicle.is_locked = false; // Always unlock when transfer completes
                 await vehicle.save({ transaction });
             }
         }
@@ -327,6 +332,7 @@ exports.cancelTransfer = async (req, res) => {
             const vehicle = await Vehicle.findByPk(item.vehicle_id);
             if (vehicle) {
                 // CHỈ cập nhật về 'In Stock' nếu xe ĐANG ở trạng thái 'Transferring'
+                // Điều này cực kỳ quan trọng để không "hủy" trạng thái Đã bán nếu một xe somehow bị bán khi đang chờ chuyển.
                 if (vehicle.status === 'Transferring') {
                     vehicle.status = 'In Stock';
                 }
@@ -345,6 +351,20 @@ exports.cancelTransfer = async (req, res) => {
         }, { transaction });
 
         await transaction.commit();
+
+        // Notification: Cancel
+        const Warehouse = require('../models/Warehouse');
+        const fromWH = await Warehouse.findByPk(transfer.from_warehouse_id);
+        const toWH = await Warehouse.findByPk(transfer.to_warehouse_id);
+        
+        await sendNotification(req, {
+            title: '❌ Phiếu chuyển đã hủy',
+            message: `Phiếu chuyển xe ${transfer.transfer_code} từ [${fromWH?.warehouse_name}] đi [${toWH?.warehouse_name}] đã bị hủy. Xe đã được mở khóa.`,
+            type: 'TRANSFER_CANCELLED',
+            warehouse_id: transfer.from_warehouse_id,
+            link: '/transfers'
+        });
+
         res.json({ message: 'Đã hủy phiếu chuyển kho.' });
     } catch (error) {
         await transaction.rollback();
@@ -366,9 +386,16 @@ exports.updateTransfer = async (req, res) => {
             return res.status(400).json({ message: 'Phiếu không thể chỉnh sửa ở trạng thái này!' });
         }
 
-        // 1. Phục hồi trạng thái 'In Stock' và MỞ KHÓA cho danh sách xe cũ
+        // 1. Phục hồi trạng thái 'In Stock' (nếu đang Transferring) và MỞ KHÓA cho danh sách xe cũ
         const oldVehicleIds = transfer.TransferItems.map(ti => ti.vehicle_id);
-        await Vehicle.update({ status: 'In Stock', is_locked: false }, { where: { id: oldVehicleIds }, transaction: t });
+        const oldVehicles = await Vehicle.findAll({ where: { id: oldVehicleIds }, transaction: t });
+        for (const v of oldVehicles) {
+            if (v.status === 'Transferring') {
+                v.status = 'In Stock';
+            }
+            v.is_locked = false;
+            await v.save({ transaction: t });
+        }
 
         // 2. Xóa các TransferItem cũ
         await TransferItem.destroy({ where: { transfer_id: id }, transaction: t });

@@ -6,6 +6,8 @@ const VehicleType = require('../models/VehicleType');
 const VehicleColor = require('../models/VehicleColor');
 const { Op } = require('sequelize');
 const sequelize = require('../config/database');
+const MaintenanceOrder = require('../models/MaintenanceOrder');
+
 
 exports.create = async (req, res) => {
   const transaction = await sequelize.transaction();
@@ -66,10 +68,12 @@ exports.create = async (req, res) => {
       contract_number,
       loan_amount,
       created_by: req.user.id,
-      gifts: gifts || []
+      gifts: gifts || [],
+      used_gifts: [] // Sẽ cập nhật sau khi xử lý trừ kho
     }, { transaction });
 
     // 2.5. XỬ LÝ QUÀ TẶNG (Trừ kho tự động nếu quà tồn tại trong danh mục)
+    const usedGiftsInfo = [];
     if (gifts && Array.isArray(gifts) && gifts.length > 0) {
         const Gift = require('../models/Gift');
         const GiftInventory = require('../models/GiftInventory');
@@ -104,12 +108,23 @@ exports.create = async (req, res) => {
 
                         // Trừ kho
                         await inventory.decrement('quantity', { by: 1, transaction });
+                        
+                        // Lưu lại để sau này biết mà hoàn trả nếu hủy đơn
+                        usedGiftsInfo.push({
+                            gift_id: gift.id,
+                            gift_name: gift.name,
+                            quantity: 1
+                        });
                     }
                 }
             } catch (giftError) {
                 console.error(`Lỗi khi xử lý quà tặng ${giftName}:`, giftError.message);
-                // Không throw error để crash đơn bán, chỉ log lại
             }
+        }
+        
+        // Cập nhật lại used_gifts cho đơn bán
+        if (usedGiftsInfo.length > 0) {
+            await sale.update({ used_gifts: usedGiftsInfo }, { transaction });
         }
     }
 
@@ -190,6 +205,39 @@ exports.delete = async (req, res) => {
             await vehicle.save({ transaction });
         }
 
+        // 2. Hoàn trả quà tặng vào kho (nếu có)
+        if (sale.used_gifts && Array.isArray(sale.used_gifts) && sale.used_gifts.length > 0) {
+            const GiftInventory = require('../models/GiftInventory');
+            const GiftTransaction = require('../models/GiftTransaction');
+
+            for (const item of sale.used_gifts) {
+                try {
+                    // Tìm hoặc tạo inventory nếu chưa có (phòng hờ)
+                    const [inventory] = await GiftInventory.findOrCreate({
+                        where: { gift_id: item.gift_id, warehouse_id: sale.warehouse_id },
+                        defaults: { quantity: 0 },
+                        transaction
+                    });
+
+                    // Tạo transaction nhập lại kho do hủy đơn
+                    await GiftTransaction.create({
+                        gift_id: item.gift_id,
+                        warehouse_id: sale.warehouse_id,
+                        quantity: item.quantity || 1,
+                        type: 'IMPORT',
+                        transaction_date: new Date(),
+                        notes: `Hoàn trả quà tặng do HỦY đơn bán lẻ xe ${vehicle?.engine_no || ''}`,
+                        created_by: req.user.id
+                    }, { transaction });
+
+                    // Cộng lại kho
+                    await inventory.increment('quantity', { by: item.quantity || 1, transaction });
+                } catch (giftRestoreError) {
+                    console.error('Lỗi hoàn trả quà tặng:', giftRestoreError.message);
+                }
+            }
+        }
+
         await sale.destroy({ transaction });
         await transaction.commit();
         res.json({ message: 'Đã xóa đơn bán và khôi phục xe vào kho' });
@@ -255,8 +303,14 @@ exports.searchVehicle = async (req, res) => {
         const { q } = req.query;
         if (!q) return res.json([]);
 
-        const list = await RetailSale.findAll({
+        const whFilter = (req.user.role !== 'ADMIN' && req.user.warehouse_id) ? { warehouse_id: req.user.warehouse_id } : {};
+
+        // 1. Search in Internal Sales (Sold Vehicles)
+        // Lưu ý: Đối với xe nội bộ, có thể cho phép xem chéo kho để nhận diện khách hệ thống, 
+        // nhưng ở đây ta sẽ tuân thủ yêu cầu cô lập dữ liệu nếu không phải Admin.
+        const soldList = await RetailSale.findAll({
             where: {
+                ...whFilter,
                 [Op.or]: [
                     { engine_no: { [Op.iLike]: `%${q}%` } },
                     { chassis_no: { [Op.iLike]: `%${q}%` } },
@@ -274,8 +328,54 @@ exports.searchVehicle = async (req, res) => {
                 }
             ]
         });
-        res.json(list);
+
+        // 2. Search in Maintenance Orders (to find previously visited external vehicles)
+        const maintenanceList = await MaintenanceOrder.findAll({
+            where: {
+                ...whFilter,
+                [Op.or]: [
+                    { engine_no: { [Op.iLike]: `%${q}%` } },
+                    { chassis_no: { [Op.iLike]: `%${q}%` } },
+                    { customer_phone: { [Op.iLike]: `%${q}%` } },
+                    { license_plate: { [Op.iLike]: `%${q}%` } }
+                ],
+            },
+            order: [['createdAt', 'DESC']], // Get most recent orders first
+            limit: 50 // Fetch more to allow grouping
+        });
+
+        // 3. Combine and Format
+        const seenEngineNos = new Set(soldList.map(s => s.engine_no?.toUpperCase()).filter(Boolean));
+        const seenLicensePlates = new Set(); // To avoid duplicate external vehicles by plate
+        
+        const combined = soldList.map(s => ({ ...s.toJSON(), is_internal: true }));
+
+        maintenanceList.forEach(m => {
+            const engineNo = m.engine_no?.toUpperCase();
+            const licensePlate = m.license_plate?.toUpperCase();
+            
+            // Skip if this vehicle was already found in soldList (Internal)
+            if (engineNo && seenEngineNos.has(engineNo)) return;
+            
+            // For external vehicles, avoid adding the same vehicle multiple times from different history records
+            const shipUniqueKey = engineNo || licensePlate;
+            if (shipUniqueKey && !seenLicensePlates.has(shipUniqueKey)) {
+                combined.push({
+                    ...m.toJSON(),
+                    is_internal: false,
+                    is_previous_external: true,
+                    phone: m.customer_phone,
+                    customer_name: m.customer_name,
+                    address: m.customer_address
+                });
+                if (shipUniqueKey) seenLicensePlates.add(shipUniqueKey);
+            }
+        });
+
+        res.json(combined.slice(0, 15));
     } catch (error) {
+
         res.status(500).json({ message: error.message });
     }
 };
+

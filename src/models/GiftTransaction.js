@@ -38,6 +38,10 @@ const GiftTransaction = sequelize.define('GiftTransaction', {
   created_by: {
     type: DataTypes.UUID,
     allowNull: true
+  },
+  price: {
+    type: DataTypes.DECIMAL(15, 2),
+    defaultValue: 0
   }
 }, {
   timestamps: true
