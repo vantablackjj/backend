@@ -101,6 +101,46 @@ const MaintenanceOrder = sequelize.define('MaintenanceOrder', {
   gift_used: {
     type: DataTypes.STRING,
     allowNull: true
+  },
+  vehicle_type: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  battery_id: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  battery_soh: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  received_at: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
+  returned_at: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
+  fuel_level: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  wash_option: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  ktdk_level: {
+    type: DataTypes.INTEGER,
+    allowNull: true
+  },
+  amber_jobs: {
+    type: DataTypes.TEXT,
+    allowNull: true
+  },
+  consultation_notes: {
+    type: DataTypes.TEXT,
+    allowNull: true
   }
 }, {
   timestamps: true

@@ -1,13 +1,13 @@
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/database');
 
-const Expense = sequelize.define('Expense', {
+const Income = sequelize.define('Income', {
   id: {
     type: DataTypes.UUID,
     defaultValue: DataTypes.UUIDV4,
     primaryKey: true
   },
-  expense_date: {
+  income_date: {
     type: DataTypes.DATE,
     allowNull: false
   },
@@ -31,10 +31,6 @@ const Expense = sequelize.define('Expense', {
     type: DataTypes.UUID,
     allowNull: true
   },
-  category: {
-    type: DataTypes.STRING,
-    allowNull: true
-  },
   is_internal: {
     type: DataTypes.BOOLEAN,
     defaultValue: false
@@ -43,4 +39,4 @@ const Expense = sequelize.define('Expense', {
   timestamps: true
 });
 
-module.exports = Expense;
+module.exports = Income;

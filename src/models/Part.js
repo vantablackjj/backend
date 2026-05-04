@@ -47,9 +47,16 @@ const Part = sequelize.define('Part', {
   description: {
     type: DataTypes.TEXT,
     allowNull: true
+  },
+  maintenance_suggestion: {
+    type: DataTypes.TEXT,
+    allowNull: true
   }
 }, {
-  timestamps: true
+  timestamps: true,
+  indexes: [
+    { fields: ['name'] }
+  ]
 });
 
 Part.belongsTo(Part, { as: 'LinkedPart', foreignKey: 'linked_part_id' });

@@ -1,3 +1,4 @@
+const { Op } = require("sequelize");
 const Vehicle = require("../models/Vehicle");
 const VehicleType = require("../models/VehicleType");
 const VehicleColor = require("../models/VehicleColor");
@@ -12,7 +13,7 @@ exports.getAvailable = async (req, res) => {
     if (queryWH) {
         where.warehouse_id = queryWH;
     } else if (req.user.role !== "ADMIN") {
-        where.warehouse_id = req.user.warehouse_id;
+        where.warehouse_id = { [Op.in]: req.user.allowedWarehouses };
     }
 
     const list = await Vehicle.findAll({
@@ -35,8 +36,8 @@ exports.getByEngineNo = async (req, res) => {
     const { engine_no } = req.query;
     let where = { engine_no, status: "In Stock", is_locked: false };
 
-    if (req.user && req.user.role !== "ADMIN" && req.user.warehouse_id) {
-      where.warehouse_id = req.user.warehouse_id;
+    if (req.user && req.user.role !== "ADMIN" && req.user.role !== "MANAGER") {
+      where.warehouse_id = { [Op.in]: req.user.allowedWarehouses };
     }
 
     const vehicle = await Vehicle.findOne({

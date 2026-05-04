@@ -32,7 +32,7 @@ const Vehicle = sequelize.define('Vehicle', {
   },
   color_id: {
     type: DataTypes.UUID,
-    allowNull: false
+    allowNull: true
   },
   purchase_id: {
     type: DataTypes.UUID,

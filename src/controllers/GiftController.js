@@ -101,7 +101,10 @@ exports.getTransactions = async (req, res) => {
 exports.importGifts = async (req, res) => {
     const t = await sequelize.transaction();
     try {
-        const { gift_id, warehouse_id, quantity, transaction_date, notes } = req.body;
+        const { gift_id, warehouse_id: bodyWH, quantity, transaction_date, notes } = req.body;
+
+        const isPowerUser = req.user.role === 'ADMIN' || req.user.role === 'MANAGER';
+        const warehouse_id = isPowerUser ? (bodyWH || req.user.warehouse_id) : req.user.warehouse_id;
 
         const transaction = await GiftTransaction.create({
             gift_id,
@@ -134,7 +137,10 @@ exports.importGifts = async (req, res) => {
 exports.exportGifts = async (req, res) => {
     const t = await sequelize.transaction();
     try {
-        const { gift_id, warehouse_id, quantity, type, transaction_date, event_name, notes } = req.body;
+        const { gift_id, warehouse_id: bodyWH, quantity, type, transaction_date, event_name, notes } = req.body;
+
+        const isPowerUser = req.user.role === 'ADMIN' || req.user.role === 'MANAGER';
+        const warehouse_id = isPowerUser ? (bodyWH || req.user.warehouse_id) : req.user.warehouse_id;
 
         if (!['EXPORT_RETAIL', 'EXPORT_EVENT', 'OTHER_EXPORT'].includes(type)) {
             throw new Error('Loại xuất kho không hợp lệ');

@@ -46,6 +46,18 @@ const MaintenanceItem = sequelize.define('MaintenanceItem', {
   purchase_price: {
     type: DataTypes.DECIMAL(15, 2),
     defaultValue: 0
+  },
+  discount_pct: {
+    type: DataTypes.DECIMAL(5, 2),
+    defaultValue: 0
+  },
+  discount_amount: {
+    type: DataTypes.DECIMAL(15, 2),
+    defaultValue: 0
+  },
+  notes: {
+    type: DataTypes.STRING,
+    allowNull: true
   }
 }, {
   timestamps: true

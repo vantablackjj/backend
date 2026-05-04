@@ -8,7 +8,7 @@ exports.register = async (req, res) => {
       username, password, role, warehouse_id, full_name, phone, 
       can_manage_debt, can_delete, can_manage_money, can_manage_spare_parts, 
       can_manage_master_data, can_manage_sales,
-      can_manage_expenses, expense_warehouses
+      can_manage_expenses, can_delete_ticket, can_edit_ticket, expense_warehouses, accessible_warehouses
     } = req.body;
     
     // Kiểm tra xem đã tồn tại chưa
@@ -32,7 +32,10 @@ exports.register = async (req, res) => {
       can_manage_master_data,
       can_manage_sales,
       can_manage_expenses,
-      expense_warehouses
+      can_delete_ticket,
+      can_edit_ticket,
+      expense_warehouses,
+      accessible_warehouses
     });
 
     res.status(201).json({ message: 'Tạo tài khoản thành công!', user: { id: user.id, username: user.username, role: user.role } });
@@ -66,7 +69,10 @@ exports.login = async (req, res) => {
         can_manage_master_data: user.can_manage_master_data,
         can_manage_sales: user.can_manage_sales,
         can_manage_expenses: user.can_manage_expenses,
-        expense_warehouses: user.expense_warehouses
+        can_delete_ticket: user.can_delete_ticket,
+        can_edit_ticket: user.can_edit_ticket,
+        expense_warehouses: user.expense_warehouses,
+        accessible_warehouses: user.accessible_warehouses
       },
       process.env.JWT_SECRET,
       { expiresIn: '24h' }
@@ -87,7 +93,10 @@ exports.login = async (req, res) => {
         can_manage_master_data: user.can_manage_master_data,
         can_manage_sales: user.can_manage_sales,
         can_manage_expenses: user.can_manage_expenses,
-        expense_warehouses: user.expense_warehouses
+        can_delete_ticket: user.can_delete_ticket,
+        can_edit_ticket: user.can_edit_ticket,
+        expense_warehouses: user.expense_warehouses,
+        accessible_warehouses: user.accessible_warehouses
       }
     });
   } catch (error) {
@@ -123,7 +132,7 @@ exports.update = async (req, res) => {
       username, password, role, warehouse_id, full_name, phone, 
       can_manage_debt, can_delete, can_manage_money, can_manage_spare_parts, 
       can_manage_master_data, can_manage_sales,
-      can_manage_expenses, expense_warehouses
+      can_manage_expenses, can_delete_ticket, can_edit_ticket, expense_warehouses, accessible_warehouses
     } = req.body;
     
     const user = await User.findByPk(id);
@@ -133,7 +142,7 @@ exports.update = async (req, res) => {
       username, role, warehouse_id, full_name, phone, 
       can_manage_debt, can_delete, can_manage_money, can_manage_spare_parts, 
       can_manage_master_data, can_manage_sales,
-      can_manage_expenses, expense_warehouses
+      can_manage_expenses, can_delete_ticket, can_edit_ticket, expense_warehouses, accessible_warehouses
     };
     
     if (password) {

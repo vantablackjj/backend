@@ -41,6 +41,10 @@ const PartTransfer = sequelize.define('PartTransfer', {
   },
   received_at: {
     type: DataTypes.DATE
+  },
+  transfer_date: {
+    type: DataTypes.DATEONLY,
+    allowNull: true
   }
 }, {
   timestamps: true

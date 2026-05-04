@@ -99,6 +99,14 @@ const RetailSale = sequelize.define('RetailSale', {
     type: DataTypes.DECIMAL(15, 2),
     defaultValue: 0
   },
+  cash_amount: {
+    type: DataTypes.DECIMAL(15, 2),
+    defaultValue: 0
+  },
+  transfer_amount: {
+    type: DataTypes.DECIMAL(15, 2),
+    defaultValue: 0
+  },
   created_by: {
     type: DataTypes.UUID,
     allowNull: true

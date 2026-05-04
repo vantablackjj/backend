@@ -19,6 +19,10 @@ const PartInventory = sequelize.define('PartInventory', {
     type: DataTypes.DECIMAL(15, 2),
     defaultValue: 0
   },
+  location: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
 
 }, {
   timestamps: true

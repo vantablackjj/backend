@@ -28,7 +28,10 @@ exports.requestTransfer = async (req, res) => {
         const user_id = req.user.id; 
 
         // XÁC ĐỊNH KHO GỐC (Source of Truth)
-        const activeFromWH = (req.user.role === 'ADMIN' && from_warehouse_id) ? from_warehouse_id : req.user.warehouse_id;
+        const activeFromWH = from_warehouse_id || req.user.warehouse_id;
+        if (!req.user.allowedWarehouses.includes(activeFromWH)) {
+            return res.status(403).json({ message: "Bạn không có quyền thực hiện tại kho xuất này" });
+        }
 
         if (activeFromWH === to_warehouse_id) {
             throw new Error('Kho xuất và kho nhận không được trùng nhau!');
@@ -124,9 +127,11 @@ exports.approveTransfer = async (req, res) => {
     try {
         const { id } = req.params;
         
-        const transfer = await Transfer.findByPk(id);
+        // Sử dụng LOCK.UPDATE để ngăn chặn race condition khi ấn nút liên tục
+        const transfer = await Transfer.findByPk(id, { transaction: t, lock: t.LOCK.UPDATE });
+        
         if (!transfer || transfer.status !== 'PENDING_ADMIN') {
-            throw new Error('Phiếu không hợp lệ hoặc đã được xử lý!');
+            throw new Error('Phiếu không hợp lệ hoặc đã được xử lý (có thể do ấn nhầm nhiều lần)!');
         }
 
         // Cập nhật từng xe (Gia cố: đảm bảo xe vẫn ở đúng kho và trạng thái đang chờ)
@@ -187,13 +192,15 @@ exports.receiveTransfer = async (req, res) => {
         const { id } = req.params;
         const user_id = req.user.id;
         
-        const transfer = await Transfer.findByPk(id);
+        // Sử dụng LOCK.UPDATE để ngăn chặn việc xác nhận nhiều lần khi click liên tục
+        const transfer = await Transfer.findByPk(id, { transaction, lock: transaction.LOCK.UPDATE });
+
         if (!transfer || transfer.status !== 'ADMIN_APPROVED') {
             throw new Error('Phiếu chưa được Admin duyệt hoặc đã nhận rồi!');
         }
 
         // KIỂM TRA QUYỀN NHẬN (Phải thuộc kho đích hoặc Admin)
-        if (req.user.role !== 'ADMIN' && transfer.to_warehouse_id !== req.user.warehouse_id) {
+        if (req.user.role !== 'ADMIN' && !req.user.allowedWarehouses.includes(transfer.to_warehouse_id)) {
             throw new Error('Bạn không có quyền xác nhận nhận xe cho kho này!');
         }
 
@@ -266,10 +273,10 @@ exports.getTransfers = async (req, res) => {
         let where = {};
         if (status) where.status = status;
         
-        if (req.user.role !== 'ADMIN' && req.user.warehouse_id) {
+        if (req.user.role !== 'ADMIN' && req.user.role !== 'MANAGER') {
             where[Op.or] = [
-                { from_warehouse_id: req.user.warehouse_id },
-                { to_warehouse_id: req.user.warehouse_id }
+                { from_warehouse_id: { [Op.in]: req.user.allowedWarehouses } },
+                { to_warehouse_id: { [Op.in]: req.user.allowedWarehouses } }
             ];
         }
 
@@ -313,7 +320,9 @@ exports.cancelTransfer = async (req, res) => {
         const { id } = req.params;
         const user_id = req.user.id;
         
-        const transfer = await Transfer.findByPk(id);
+        // Sử dụng LOCK.UPDATE để bảo vệ trạng thái phiếu
+        const transfer = await Transfer.findByPk(id, { transaction, lock: transaction.LOCK.UPDATE });
+
         if (transfer.status === 'RECEIVED' || transfer.status === 'CANCELLED') {
              throw new Error('Không thể hủy phiếu đã hoàn tất hoặc đã hủy!');
         }

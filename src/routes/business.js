@@ -3,7 +3,9 @@ const router = express.Router();
 
 const retailController = require('../controllers/RetailSaleController');
 const expenseController = require('../controllers/ExpenseController');
+const incomeController = require('../controllers/IncomeController');
 const purchaseController = require('../controllers/PurchaseController');
+
 const wholesaleController = require('../controllers/WholesaleSaleController');
 const inventoryController = require('../controllers/InventoryController');
 const transferController = require('../controllers/TransferController');
@@ -11,7 +13,7 @@ const vehicleController = require('../controllers/VehicleController');
 const retailPaymentController = require('../controllers/RetailPaymentController');
 const Vehicle = require('../models/Vehicle');
 
-const { isAdmin, canManageDebt, canDelete, canManageMoney, canManageExpenses, canManageSales, canManageVehicles } = require('../middleware/authMiddleware');
+const { isAdmin, canManageDebt, canDelete, canManageMoney, canManageExpenses, canManageSales, canManageVehicles, canApproveTransfer } = require('../middleware/authMiddleware');
 
 // Retail Sales
 router.get('/retail-sales', canManageSales, retailController.getAll);
@@ -29,11 +31,18 @@ router.get('/expenses', canManageExpenses, expenseController.getAll);
 router.post('/expenses', canManageExpenses, expenseController.create);
 router.delete('/expenses/:id', canManageExpenses, expenseController.delete);
 
+// Incomes (Other Income)
+router.get('/incomes', canManageExpenses, incomeController.getAll);
+router.post('/incomes', canManageExpenses, incomeController.create);
+router.delete('/incomes/:id', canManageExpenses, incomeController.delete);
+
+
 // Purchases
 router.get('/purchases', purchaseController.getBySupplier);
 router.post('/purchases', purchaseController.createPurchase);
 router.get('/purchases/:id/details', purchaseController.getPurchaseDetails);
 router.post('/purchases/payment', canManageMoney, purchaseController.addPayment);
+router.post('/purchases/pay-all', canManageMoney, purchaseController.payAllPurchases);
 router.delete('/purchases-payments/:id', canManageMoney, purchaseController.deletePayment);
 router.delete('/purchases/:id', canDelete, purchaseController.deleteLot);
 router.delete('/purchases/:purchase_id/vehicles/:vehicle_id', canDelete, purchaseController.deleteVehicleFromPurchase);
@@ -45,6 +54,7 @@ router.get('/wholesale-sales', canManageSales, wholesaleController.getByCustomer
 router.post('/wholesale-sales', canManageSales, wholesaleController.createSale);
 router.get('/wholesale-sales/:id/details', canManageSales, wholesaleController.getSaleDetails);
 router.post('/wholesale-sales/payment', canManageMoney, wholesaleController.addPayment);
+router.post('/wholesale-sales/pay-all', canManageMoney, wholesaleController.payAllSales);
 router.delete('/wholesale-payments/:id', canManageMoney, wholesaleController.deletePayment);
 router.delete('/wholesale-sales/:id', canDelete, wholesaleController.deleteSale);
 router.delete('/wholesale-sales/:sale_id/vehicles/:vehicle_id', canDelete, wholesaleController.deleteVehicleFromSale);
@@ -64,7 +74,7 @@ router.get('/transfers', transferController.getTransfers);
 router.post('/transfers', transferController.requestTransfer);
 router.get('/transfers/:id', transferController.getDetails);
 router.put('/transfers/:id', isAdmin, transferController.updateTransfer);
-router.post('/transfers/:id/approve', isAdmin, transferController.approveTransfer);
+router.post('/transfers/:id/approve', canApproveTransfer, transferController.approveTransfer);
 router.post('/transfers/:id/receive', transferController.receiveTransfer);
 router.post('/transfers/:id/cancel', transferController.cancelTransfer);
 router.post('/transfers/payment', canManageMoney, transferController.addPayment);

@@ -17,6 +17,7 @@ exports.create = async (req, res) => {
       address, id_card, phone, gender, sale_type, guarantee,
       guarantor_name, guarantor_phone, seller_id, 
       warehouse_id: bodyWH, payment_method, bank_name, contract_number, loan_amount,
+      cash_amount, transfer_amount,
       gifts, birthday
     } = req.body;
 
@@ -24,19 +25,23 @@ exports.create = async (req, res) => {
     const actualSellerId = (req.user.role === 'ADMIN' && seller_id) ? seller_id : req.user.id;
 
 
-    // KIỂM TRA GIÁ BÁN TẠI BACKEND
-    if (!sale_price || Number(sale_price) <= 0) {
-        throw new Error('Giá bán thực tế của xe phải lớn hơn 0!');
+    // KIỂM TRA GIÁ BÁN TẠI BACKEND (Cho phép 0đ cho trường hợp đặc biệt)
+    if (sale_price === undefined || sale_price === null || Number(sale_price) < 0) {
+        throw new Error('Giá bán thực tế của xe phải hợp lệ (>= 0)!');
     }
 
 
     // XÁC ĐỊNH KHO THỰC TẾ (Source of Truth)
-    const activeWarehouseId = (req.user.role === 'ADMIN' && bodyWH) ? bodyWH : req.user.warehouse_id;
+    const activeWarehouseId = bodyWH || req.user.warehouse_id;
+    if (!req.user.allowedWarehouses.includes(activeWarehouseId)) {
+        return res.status(403).json({ message: "Bạn không có quyền thực hiện tại kho này" });
+    }
 
     // 1. Kiểm tra xe phải có trong kho và THUỘC ĐÚNG KHO ĐANG LÀM VIỆC
     const vehicle = await Vehicle.findOne({ 
         where: { id: vehicle_id, warehouse_id: activeWarehouseId, status: 'In Stock', is_locked: false }, 
-        transaction 
+        transaction,
+        lock: transaction.LOCK.UPDATE // NGĂN CHẶN RĂNG CƯA KHI BÁN CÙNG LÚC
     });
     
     if (!vehicle) throw new Error('Xe này không tồn tại, đã bán, hoặc ĐANG BỊ KHÓA (đang chuyển kho)!');
@@ -67,6 +72,8 @@ exports.create = async (req, res) => {
       bank_name,
       contract_number,
       loan_amount,
+      cash_amount: cash_amount || 0,
+      transfer_amount: transfer_amount || 0,
       created_by: req.user.id,
       gifts: gifts || [],
       used_gifts: [] // Sẽ cập nhật sau khi xử lý trừ kho
@@ -79,8 +86,12 @@ exports.create = async (req, res) => {
         const GiftInventory = require('../models/GiftInventory');
         const GiftTransaction = require('../models/GiftTransaction');
 
-        for (const giftName of gifts) {
+        for (const giftItem of gifts) {
             try {
+                // Hỗ trợ cả định dạng cũ (string) và mới (object {name, quantity})
+                const giftName = typeof giftItem === 'string' ? giftItem : giftItem.name;
+                const giftQty = typeof giftItem === 'string' ? 1 : (Number(giftItem.quantity) || 1);
+
                 // Tìm quà theo tên (không phân biệt hoa thường)
                 const gift = await Gift.findOne({ 
                     where: { name: { [Op.iLike]: giftName } }, 
@@ -94,12 +105,12 @@ exports.create = async (req, res) => {
                         transaction
                     });
 
-                    if (inventory && Number(inventory.quantity) > 0) {
+                    if (inventory && Number(inventory.quantity) >= giftQty) {
                         // Tạo transaction xuất kho
                         await GiftTransaction.create({
                             gift_id: gift.id,
                             warehouse_id: activeWarehouseId,
-                            quantity: -1,
+                            quantity: -giftQty,
                             type: 'EXPORT_RETAIL',
                             transaction_date: sale_date || new Date(),
                             notes: `Tặng kèm xe ${vehicle.engine_no} cho khách ${customer_name}`,
@@ -107,18 +118,18 @@ exports.create = async (req, res) => {
                         }, { transaction });
 
                         // Trừ kho
-                        await inventory.decrement('quantity', { by: 1, transaction });
+                        await inventory.decrement('quantity', { by: giftQty, transaction });
                         
                         // Lưu lại để sau này biết mà hoàn trả nếu hủy đơn
                         usedGiftsInfo.push({
                             gift_id: gift.id,
                             gift_name: gift.name,
-                            quantity: 1
+                            quantity: giftQty
                         });
                     }
                 }
             } catch (giftError) {
-                console.error(`Lỗi khi xử lý quà tặng ${giftName}:`, giftError.message);
+                console.error(`Lỗi khi xử lý quà tặng ${giftItem}:`, giftError.message);
             }
         }
         
@@ -158,13 +169,13 @@ exports.create = async (req, res) => {
 exports.getAll = async (req, res) => {
   try {
     let where = {};
-    if (req.user.role !== 'ADMIN') {
-        where.warehouse_id = req.user.warehouse_id;
+    if (req.user.role !== 'ADMIN' && req.user.role !== 'MANAGER') {
+        where.warehouse_id = { [Op.in]: req.user.allowedWarehouses };
     }
     
     const list = await RetailSale.findAll({ 
       where,
-      order: [['sale_date', 'DESC']],
+      order: [['sale_date', 'DESC'], ['createdAt', 'DESC']],
       attributes: { include: [['total_price', 'sale_price']] },
       include: [
         { model: User, as: 'seller', attributes: ['full_name', 'phone'] },
@@ -193,8 +204,8 @@ exports.delete = async (req, res) => {
         if (!sale) return res.status(404).json({ message: 'Không tìm thấy đơn bán' });
 
         // KIỂM TRA QUYỀN XÓA
-        if (req.user.role !== 'ADMIN' && sale.warehouse_id !== req.user.warehouse_id) {
-            throw new Error('Bạn không có quyền xóa đơn bán của kho khác!');
+        if (req.user.role !== 'ADMIN' && !req.user.allowedWarehouses.includes(sale.warehouse_id)) {
+            throw new Error('Bạn không có quyền xóa đơn bán của kho này!');
         }
 
         // Khôi phục trạng thái xe về In Stock
@@ -255,8 +266,8 @@ exports.updateDisbursement = async (req, res) => {
         const sale = await RetailSale.findByPk(id);
         if (!sale) return res.status(404).json({ message: 'Không tìm thấy hóa đơn!' });
 
-        if (req.user.role !== 'ADMIN' && sale.warehouse_id !== req.user.warehouse_id) {
-            return res.status(403).json({ message: 'Bạn không có quyền cập nhật hóa đơn của kho khác!' });
+        if (req.user.role !== 'ADMIN' && !req.user.allowedWarehouses.includes(sale.warehouse_id)) {
+            return res.status(403).json({ message: 'Bạn không có quyền cập nhật hóa đơn của kho này!' });
         }
 
         // BIÊN PHÁP BẢO VỆ: Nếu đã giải ngân, chỉ ADMIN mới được phép HỦY (Quay xe)
@@ -283,8 +294,8 @@ exports.updateGuaranteeBook = async (req, res) => {
         const sale = await RetailSale.findByPk(id);
         if (!sale) return res.status(404).json({ message: 'Không tìm thấy hóa đơn!' });
 
-        if (req.user.role !== 'ADMIN' && sale.warehouse_id !== req.user.warehouse_id) {
-            return res.status(403).json({ message: 'Bạn không có quyền cập nhật hóa đơn của kho khác!' });
+        if (req.user.role !== 'ADMIN' && !req.user.allowedWarehouses.includes(sale.warehouse_id)) {
+            return res.status(403).json({ message: 'Bạn không có quyền cập nhật hóa đơn của kho này!' });
         }
 
         await sale.update({
@@ -303,7 +314,7 @@ exports.searchVehicle = async (req, res) => {
         const { q } = req.query;
         if (!q) return res.json([]);
 
-        const whFilter = (req.user.role !== 'ADMIN' && req.user.warehouse_id) ? { warehouse_id: req.user.warehouse_id } : {};
+        const whFilter = req.user.role !== 'ADMIN' ? { warehouse_id: { [Op.in]: req.user.allowedWarehouses } } : {};
 
         // 1. Search in Internal Sales (Sold Vehicles)
         // Lưu ý: Đối với xe nội bộ, có thể cho phép xem chéo kho để nhận diện khách hệ thống, 

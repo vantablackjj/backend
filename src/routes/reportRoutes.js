@@ -11,6 +11,7 @@ router.patch('/vehicle-update/:id', canManageVehicles, reportController.updateVe
 router.get('/inventory', canManageVehicles, reportController.getInventoryReport);
 router.get('/general', canManageSales, reportController.getGeneralReport);
 router.get('/wholesale-audit', canManageSales, reportController.getWholesaleAudit);
+router.get('/wholesale-audit-overview', canManageSales, reportController.getWholesaleAuditOverview);
 router.get('/retail-sales-report', canManageSales, reportController.getRetailSalesReport);
 router.get('/warranty-report', canManageSales, reportController.getWarrantyReport);
 router.get('/daily', canManageSales, reportController.getDailyReport);
@@ -21,6 +22,9 @@ router.get('/parts/purchases', canManageSpareParts, reportController.getPartPurc
 router.get('/parts/purchases-summary', canManageSpareParts, reportController.getPartImportSummaryReport);
 router.get('/parts/sales', canManageSpareParts, reportController.getPartSalesReport);
 router.get('/parts/usage', canManageSpareParts, reportController.getPartUsageReport);
+router.get('/parts/transfers', canManageSpareParts, reportController.getPartTransferReport);
+router.get('/parts/transfers-summary', canManageSpareParts, reportController.getPartTransferSummaryReport);
+router.get('/maintenance', canManageSpareParts, reportController.getMaintenanceReport);
 
 
 module.exports = router;

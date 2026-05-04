@@ -17,7 +17,7 @@ const User = sequelize.define('User', {
     allowNull: false
   },
   role: {
-    type: DataTypes.ENUM('ADMIN', 'STAFF'),
+    type: DataTypes.ENUM('ADMIN', 'MANAGER', 'STAFF'),
     defaultValue: 'STAFF'
   },
 
@@ -59,8 +59,24 @@ const User = sequelize.define('User', {
     type: DataTypes.BOOLEAN,
     defaultValue: false
   },
+  can_delete_ticket: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
+  },
+  can_edit_ticket: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
+  },
+  can_approve_transfer: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
+  },
   expense_warehouses: {
     type: DataTypes.TEXT, // Chuỗi lưu ID kho cách nhau bởi dấu phẩy
+    allowNull: true
+  },
+  accessible_warehouses: {
+    type: DataTypes.TEXT, // Chuỗi lưu ID kho cách nhau bởi dấu phẩy (truy cập chung)
     allowNull: true
   }
 }, {

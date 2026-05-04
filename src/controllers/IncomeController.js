@@ -1,4 +1,4 @@
-const Expense = require('../models/Expense');
+const Income = require('../models/Income');
 const Vehicle = require('../models/Vehicle');
 const Warehouse = require('../models/Warehouse');
 const { Op } = require('sequelize');
@@ -8,7 +8,7 @@ const dayjs = require('dayjs');
 
 exports.getAll = async (req, res) => {
   try {
-    const { from_date, to_date, warehouse_id, query, category } = req.query;
+    const { from_date, to_date, warehouse_id, query } = req.query;
     let where = {};
     
     // Auth filtering
@@ -25,28 +25,24 @@ exports.getAll = async (req, res) => {
         where.warehouse_id = warehouse_id;
     }
 
-    if (category) {
-        where.category = category;
-    }
-
     if (from_date && to_date) {
         where[Op.and] = [
             sequelize.where(
-                sequelize.fn('date', sequelize.fn('timezone', 'Asia/Ho_Chi_Minh', sequelize.col('expense_date'))),
+                sequelize.fn('date', sequelize.fn('timezone', 'Asia/Ho_Chi_Minh', sequelize.col('income_date'))),
                 { [Op.between]: [from_date, to_date] }
             )
         ];
     } else if (from_date) {
         where[Op.and] = [
             sequelize.where(
-                sequelize.fn('date', sequelize.fn('timezone', 'Asia/Ho_Chi_Minh', sequelize.col('expense_date'))),
+                sequelize.fn('date', sequelize.fn('timezone', 'Asia/Ho_Chi_Minh', sequelize.col('income_date'))),
                 { [Op.gte]: from_date }
             )
         ];
     } else if (to_date) {
         where[Op.and] = [
             sequelize.where(
-                sequelize.fn('date', sequelize.fn('timezone', 'Asia/Ho_Chi_Minh', sequelize.col('expense_date'))),
+                sequelize.fn('date', sequelize.fn('timezone', 'Asia/Ho_Chi_Minh', sequelize.col('income_date'))),
                 { [Op.lte]: to_date }
             )
         ];
@@ -65,9 +61,9 @@ exports.getAll = async (req, res) => {
         ];
     }
 
-    const list = await Expense.findAll({ 
+    const list = await Income.findAll({ 
       where,
-      order: [['expense_date', 'DESC']],
+      order: [['income_date', 'DESC']],
       include
     });
     res.json(list);
@@ -79,8 +75,6 @@ exports.getAll = async (req, res) => {
 exports.create = async (req, res) => {
   try {
     const data = { ...req.body };
-    // Non-admin can only create expenses for their own warehouse
-    // Non-admin can only create expenses for their own warehouse or allowed warehouses
     const warehouse_id = data.warehouse_id || req.user.warehouse_id;
     
     // Permission check: Admin/Manager can do anything. Others must check allowedWarehouses.
@@ -91,19 +85,19 @@ exports.create = async (req, res) => {
     }
 
     data.warehouse_id = warehouse_id || null;
-    const expense = await Expense.create(data);
+    const income = await Income.create(data);
     
-    // Notification: New Expense
+    // Notification: New Income
     const warehouseObj = data.warehouse_id || req.user.warehouse_id ? await Warehouse.findByPk(data.warehouse_id || req.user.warehouse_id) : null;
     await sendNotification(req, {
-        title: '💸 Khoản chi mới',
-        message: `Nhân viên ${req.user.full_name} đã ghi nhận khoản chi ${Number(data.amount).toLocaleString()} đ tại [${warehouseObj?.warehouse_name || 'Toàn hệ thống'}]. Nội dung: ${data.content}.`,
-        type: 'EXPENSE',
+        title: '💰 Khoản thu mới',
+        message: `Nhân viên ${req.user.full_name} đã ghi nhận khoản thu ${Number(data.amount).toLocaleString()} đ tại [${warehouseObj?.warehouse_name || 'Toàn hệ thống'}]. Nội dung: ${data.content}.`,
+        type: 'INCOME',
         warehouse_id: data.is_internal ? null : (data.warehouse_id || req.user.warehouse_id || null),
         link: '/expenses'
     });
 
-    res.status(201).json(expense);
+    res.status(201).json(income);
   } catch (error) {
     res.status(400).json({ message: error.message });
   }
@@ -116,8 +110,8 @@ exports.delete = async (req, res) => {
     if (req.user.role !== 'ADMIN' && req.user.role !== 'MANAGER') {
       where.warehouse_id = { [Op.in]: req.user.allowedWarehouses };
     }
-    await Expense.destroy({ where });
-    res.json({ message: 'Đã xóa chi tiêu thành công' });
+    await Income.destroy({ where });
+    res.json({ message: 'Đã xóa thu nhập thành công' });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

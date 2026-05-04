@@ -30,11 +30,11 @@ exports.getAll = async (req, res) => {
       }
     }
 
-    // Role-based filtering: Non-admins only see vehicles in their warehouse
-    // EXCEPT when searching specifically by engine number or chassis number (global search)
-    if (req.user.role !== 'ADMIN') {
-        if (!search && !engine_no && !chassis_no) {
-            where.warehouse_id = req.user.warehouse_id;
+    // Role-based filtering: Non-admins only see vehicles in their warehouse by default
+    // BUT allow them to see other warehouses if they specify warehouse_id in query
+    if (req.user.role !== 'ADMIN' && req.user.role !== 'MANAGER') {
+        if (!search && !engine_no && !chassis_no && !warehouse_id) {
+            where.warehouse_id = { [Op.in]: req.user.allowedWarehouses };
         }
     }
 
@@ -83,8 +83,8 @@ exports.delete = async (req, res) => {
         if (!vehicle) return res.status(404).json({ message: 'Không tìm thấy xe' });
 
         // KIỂM TRA QUYỀN
-        if (req.user.role !== 'ADMIN' && vehicle.warehouse_id !== req.user.warehouse_id) {
-            return res.status(403).json({ message: 'Bạn không có quyền xóa xe của kho khác' });
+        if (req.user.role !== 'ADMIN' && !req.user.allowedWarehouses.includes(vehicle.warehouse_id)) {
+            return res.status(403).json({ message: 'Bạn không có quyền xóa xe của kho này' });
         }
 
         // Nếu xe đã bán hoặc đang khóa thì không cho xóa ngang xương

@@ -15,7 +15,9 @@ const RetailPayment = require('../models/RetailPayment');
 const PurchasePayment = require('../models/PurchasePayment');
 const TransferPayment = require('../models/TransferPayment');
 const Expense = require('../models/Expense');
+const Income = require('../models/Income');
 const Part = require('../models/Part');
+
 const PartInventory = require('../models/PartInventory');
 const PartPurchase = require('../models/PartPurchase');
 const PartPurchaseItem = require('../models/PartPurchaseItem');
@@ -23,6 +25,8 @@ const PartSale = require('../models/PartSale');
 const PartSaleItem = require('../models/PartSaleItem');
 const MaintenanceOrder = require('../models/MaintenanceOrder');
 const MaintenanceItem = require('../models/MaintenanceItem');
+const PartTransfer = require('../models/PartTransfer');
+const PartTransferItem = require('../models/PartTransferItem');
 const sequelize = require('../config/database');
 const { Op } = require('sequelize');
 const dayjs = require('dayjs');
@@ -49,7 +53,7 @@ exports.getVehicleLifecycle = async (req, res) => {
             include: [
                 { model: VehicleType, attributes: ['name'] },
                 { model: VehicleColor, attributes: ['color_name'] },
-                { model: Warehouse, attributes: ['warehouse_name'] }
+                { model: Warehouse, attributes: ['warehouse_name', 'address', 'location', 'phone', 'mobile'] }
             ]
         });
 
@@ -84,8 +88,8 @@ exports.getVehicleLifecycle = async (req, res) => {
             include: [{ 
                 model: Transfer, 
                 include: [
-                    { model: Warehouse, as: 'fromWarehouse', attributes: ['warehouse_name'] },
-                    { model: Warehouse, as: 'toWarehouse', attributes: ['warehouse_name'] }
+                    { model: Warehouse, as: 'fromWarehouse', attributes: ['warehouse_name', 'address', 'location', 'phone', 'mobile'] },
+                    { model: Warehouse, as: 'toWarehouse', attributes: ['warehouse_name', 'address', 'location', 'phone', 'mobile'] }
                 ] 
             }]
         });
@@ -191,7 +195,7 @@ exports.getVehicleLookup = async (req, res) => {
         let includes = [
             { model: VehicleType, attributes: ['name'] },
             { model: VehicleColor, attributes: ['color_name'] },
-            { model: Warehouse, attributes: ['warehouse_name'] }
+            { model: Warehouse, attributes: ['warehouse_name', 'address', 'location', 'phone', 'mobile'] }
         ];
 
         let purchaseInclude = { 
@@ -208,10 +212,14 @@ exports.getVehicleLookup = async (req, res) => {
         ] };
 
         // QUẢN LÝ QUYỀN TRUY CẬP DỮ LIỆU
-        if (req.user.role !== 'ADMIN') {
-            where.warehouse_id = req.user.warehouse_id;
-        } else if (req.query.warehouse_id) {
-            where.warehouse_id = req.query.warehouse_id;
+        const targetWH = req.query.warehouse_id;
+        if (targetWH) {
+            if (!req.user.allowedWarehouses.includes(targetWH)) {
+                return res.status(403).json({ message: "Bạn không có quyền xem báo cáo tại kho này" });
+            }
+            where.warehouse_id = targetWH;
+        } else if (req.user.role !== 'ADMIN' && req.user.role !== 'MANAGER') {
+            where.warehouse_id = { [Op.in]: req.user.allowedWarehouses };
         }
 
 
@@ -366,17 +374,21 @@ exports.getVehicleLookup = async (req, res) => {
             // 1. Ưu tiên giá bán lẻ (RetailSale.total_price)
             // 2. Nếu không có (bán buôn), lấy giá bán buôn từng chiếc (wholesale_price_vnd)
             // 3. Nếu vẫn không có, lấy trung bình lô (total_amount_vnd / count)
+            // LOGIC TÍNH GIÁ BÁN & THANH TOÁN:
             let salePrice = 0;
+            let paidAmount = 0;
+            let loanAmount = 0;
+            let isDisbursed = false;
+
             if (v.RetailSale) {
-                salePrice = v.RetailSale.total_price;
+                salePrice = Number(v.RetailSale.total_price || 0);
+                paidAmount = Number(v.RetailSale.paid_amount || 0);
+                loanAmount = Number(v.RetailSale.loan_amount || 0);
+                isDisbursed = v.RetailSale.is_disbursed;
             } else if (v.WholesaleSale) {
-                // SỬA LỖI: Lấy giá bán buôn của từng xe (wholesale_price_vnd)
-                // Nếu chưa có (dữ liệu cũ), dùng trung bình lô (tổng / số lượng)
-                const lotCount = v.WholesaleSale.Vehicles?.length || 1; // Tuy nhiên includes không có Vehicles ở đây
-                // Vì không include Vehicles, ta có thể dùng wholesale_price_vnd làm chính
-                // Nếu không có, tạm thời dùng total_amount_vnd (nhưng đây là lỗi gốc) 
-                // Tốt nhất là Number(v.wholesale_price_vnd) || 0
                 salePrice = Number(v.wholesale_price_vnd || 0);
+                // Đối với bán sỉ, ta có thể lấy thông tin thanh toán từ WholesaleSale nếu cần
+                paidAmount = Number(v.WholesaleSale.paid_amount_vnd || 0);
             }
 
             return {
@@ -385,7 +397,7 @@ exports.getVehicleLookup = async (req, res) => {
                 chassis_no: v.chassis_no,
                 type_name: v.VehicleType?.name,
                 color_name: v.VehicleColor?.color_name,
-                warehouse_name: v.Warehouse?.warehouse_name || 'N/A', // ADDED
+                warehouse_name: v.Warehouse?.warehouse_name || 'N/A',
                 import_date: v.Purchase?.purchase_date,
                 importer_name: v.Purchase?.creator?.full_name || 'N/A',
                 supplier_name: v.Purchase?.Supplier?.name || 'N/A',
@@ -393,15 +405,20 @@ exports.getVehicleLookup = async (req, res) => {
                 sale_date: saleDate,
                 sale_channel: channel,
                 sale_price: salePrice,
+                paid_amount: paidAmount,
+                loan_amount: loanAmount,
+                is_disbursed: isDisbursed,
+                retail_sale_id: v.retail_sale_id, // Quan trọng: Thêm ID để tra cứu thanh toán
+                wholesale_sale_id: v.wholesale_sale_id, // Quan trọng
+                customer_id: v.WholesaleSale?.customer_id, // ID khách buôn
                 customer_name: v.RetailSale?.customer_name || v.WholesaleSale?.WholesaleCustomer?.name || 'N/A',
                 address: v.RetailSale?.address || v.WholesaleSale?.WholesaleCustomer?.address || 'N/A',
-                wholesale_sale_id: v.wholesale_sale_id,
                 purchase_id: v.purchase_id,
+                supplier_id: v.Purchase?.supplier_id, // ID nhà cung cấp
                 guarantee: v.RetailSale?.guarantee || 'Không',
                 payment_method: v.RetailSale?.payment_method,
                 bank_name: v.RetailSale?.bank_name,
-                contract_number: v.RetailSale?.contract_number,
-                loan_amount: v.RetailSale?.loan_amount
+                contract_number: v.RetailSale?.contract_number
             };
         });
 
@@ -482,10 +499,13 @@ exports.getInventoryReport = async (req, res) => {
         const { warehouse_id, type_id, color_id } = req.query;
         let where = { status: { [Op.ne]: 'Sold' } }; // Lấy tồn kho (bao gồm cả xe đang chuyển)
 
-        // Áp dụng bộ lọc (Mặc định là kho của mình nếu là nhân viên và không chọn kho khác)
-        const targetWH = warehouse_id || (req.user.role !== 'ADMIN' ? req.user.warehouse_id : null);
+        // Áp dụng bộ lọc (Cho phép nhân viên xem tồn kho của kho khác để hỗ trợ điều chuyển/bán hàng)
+        const targetWH = warehouse_id || req.query.warehouse_id;
         if (targetWH) {
             where.warehouse_id = targetWH;
+        } else if (req.user.role !== 'ADMIN' && req.user.role !== 'MANAGER') {
+            // Mặc định vẫn là các kho được phép nếu không chọn cụ thể
+            where.warehouse_id = { [Op.in]: req.user.allowedWarehouses };
         }
 
         if (type_id) where.type_id = type_id;
@@ -497,7 +517,7 @@ exports.getInventoryReport = async (req, res) => {
             include: [
                 { model: VehicleType, attributes: ['name'] },
                 { model: VehicleColor, attributes: ['color_name'] },
-                { model: Warehouse, attributes: ['warehouse_name'] },
+                { model: Warehouse, attributes: ['warehouse_name', 'address', 'location', 'phone', 'mobile'] },
                 { 
                     model: Purchase, 
                     attributes: ['purchase_date'],
@@ -620,6 +640,75 @@ exports.getWholesaleAudit = async (req, res) => {
     }
 };
 
+exports.getWholesaleAuditOverview = async (req, res) => {
+    try {
+        const { from_date, to_date, type } = req.query;
+
+        // 1. Fetch all wholesale customers (filter by type if needed)
+        let customerWhere = {};
+        if (type) {
+            customerWhere.customer_type = { [Op.or]: [type, 'BOTH'] };
+        }
+        const customers = await WholesaleCustomer.findAll({ where: customerWhere });
+
+        // 2. Fetch aggregated sales data grouped by customer
+        let salesWhere = {};
+        if (from_date && to_date) {
+            salesWhere[Op.and] = [
+                sequelize.where(
+                    sequelize.fn('date', sequelize.fn('timezone', 'Asia/Ho_Chi_Minh', sequelize.col('sale_date'))),
+                    { [Op.between]: [from_date, to_date] }
+                )
+            ];
+        }
+
+        const salesOverview = await WholesaleSale.findAll({
+            where: salesWhere,
+            attributes: [
+                'customer_id',
+                [sequelize.fn('SUM', sequelize.col('total_amount_vnd')), 'total_amount'],
+                [sequelize.fn('SUM', sequelize.col('paid_amount_vnd')), 'paid_amount']
+            ],
+            group: ['customer_id'],
+            raw: true
+        });
+
+        // Create a map for quick lookup
+        const salesMap = {};
+        salesOverview.forEach(s => {
+            salesMap[s.customer_id] = {
+                total_amount: Number(s.total_amount || 0),
+                paid_amount: Number(s.paid_amount || 0)
+            };
+        });
+
+        // 3. Combine customer info with debt data
+        const result = customers.map(c => {
+            const stats = salesMap[c.id] || { total_amount: 0, paid_amount: 0 };
+            return {
+                id: c.id,
+                customer_code: c.customer_code,
+                name: c.name,
+                phone: c.phone,
+                address: c.address,
+                customer_type: c.customer_type,
+                total_amount: stats.total_amount,
+                paid_amount: stats.paid_amount,
+                balance: stats.total_amount - stats.paid_amount
+            };
+        });
+
+        // 4. Optionally filter out customers with no activity if dates are provided, 
+        // or just return all if the user wants an overview.
+        // Let's return all but sort by balance (highest debt first)
+        result.sort((a, b) => b.balance - a.balance);
+
+        res.json(result);
+    } catch (e) {
+        res.status(500).json({ message: e.message });
+    }
+};
+
 exports.getRetailSalesReport = async (req, res) => {
     try {
         const { from_date, to_date, has_debt } = req.query;
@@ -635,13 +724,17 @@ exports.getRetailSalesReport = async (req, res) => {
         }
 
         if (has_debt === 'true') {
-            where[Op.and] = sequelize.literal('total_price - paid_amount - (CASE WHEN is_disbursed = true THEN loan_amount ELSE 0 END) > 0');
+            where[Op.and] = sequelize.literal('total_price - paid_amount - (CASE WHEN is_disbursed THEN loan_amount ELSE 0 END) > 0');
         }
 
-        if (req.user.role !== 'ADMIN') {
-            where.warehouse_id = req.user.warehouse_id;
-        } else if (req.query.warehouse_id) {
-            where.warehouse_id = req.query.warehouse_id;
+        const targetWH = req.query.warehouse_id;
+        if (targetWH) {
+            if (!req.user.allowedWarehouses.includes(targetWH)) {
+                return res.status(403).json({ message: "Bạn không có quyền xem báo cáo tại kho này" });
+            }
+            where.warehouse_id = targetWH;
+        } else if (req.user.role !== 'ADMIN' && req.user.role !== 'MANAGER') {
+            where.warehouse_id = { [Op.in]: req.user.allowedWarehouses };
         }
 
 
@@ -665,20 +758,41 @@ exports.getRetailSalesReport = async (req, res) => {
             order: [['sale_date', 'DESC']]
         });
 
-        // Tín toán tổng hợp cho Footer (Tổng số xe, Doanh thu, Thực thu, Tổng nợ)
+        // Tính toán tổng hợp cho Footer (Tổng số xe, Doanh thu, Thực thu, Tổng nợ)
         const summary = {
             total_count: sales.length,
             total_revenue: sales.reduce((sum, s) => sum + Number(s.total_price || 0), 0),
-            total_collected: sales.reduce((sum, s) => sum + Number(s.paid_amount || 0) + (s.is_disbursed ? Number(s.loan_amount || 0) : 0), 0),
-            total_debt: sales.reduce((sum, s) => sum + (Number(s.total_price || 0) - Number(s.paid_amount || 0) - (s.is_disbursed ? Number(s.loan_amount || 0) : 0)), 0),
+            total_collected: sales.reduce((sum, s) => {
+                const isDisbursed = s.is_disbursed === true || s.is_disbursed === 1 || s.is_disbursed === '1';
+                return sum + Number(s.paid_amount || 0) + (isDisbursed ? Number(s.loan_amount || 0) : 0);
+            }, 0),
+            total_cash: sales.reduce((sum, s) => sum + Number(s.cash_amount || 0), 0),
+            total_transfer: sales.reduce((sum, s) => sum + Number(s.transfer_amount || 0), 0),
+            total_debt: sales.reduce((sum, s) => {
+                const isDisbursed = s.is_disbursed === true || s.is_disbursed === 1 || s.is_disbursed === '1';
+                return sum + (Number(s.total_price || 0) - Number(s.paid_amount || 0) - (isDisbursed ? Number(s.loan_amount || 0) : 0));
+            }, 0),
             total_gifts: {}
         };
 
         // Đếm tổng số lượng quà tặng đã phát
         sales.forEach(s => {
-            if (s.gifts && Array.isArray(s.gifts)) {
-                s.gifts.forEach(giftName => {
-                    summary.total_gifts[giftName] = (summary.total_gifts[giftName] || 0) + 1;
+            let giftArray = [];
+            try {
+                if (s.gifts) {
+                    giftArray = typeof s.gifts === 'string' ? JSON.parse(s.gifts) : s.gifts;
+                }
+            } catch (e) {
+                giftArray = [];
+            }
+
+            if (giftArray && Array.isArray(giftArray)) {
+                giftArray.forEach(g => {
+                    const name = typeof g === 'string' ? g : (g.name || g.gift_name);
+                    const qty = typeof g === 'string' ? 1 : (Number(g.quantity) || 1);
+                    if (name) {
+                        summary.total_gifts[name] = (summary.total_gifts[name] || 0) + qty;
+                    }
                 });
             }
         });
@@ -723,10 +837,14 @@ exports.getWarrantyReport = async (req, res) => {
             guarantee: 'Có'
         };
 
-        if (req.user.role !== 'ADMIN') {
-            where.warehouse_id = req.user.warehouse_id;
-        } else if (req.query.warehouse_id) {
-            where.warehouse_id = req.query.warehouse_id;
+        const targetWH = req.query.warehouse_id;
+        if (targetWH) {
+            if (!req.user.allowedWarehouses.includes(targetWH)) {
+                return res.status(403).json({ message: "Bạn không có quyền xem báo cáo tại kho này" });
+            }
+            where.warehouse_id = targetWH;
+        } else if (req.user.role !== 'ADMIN' && req.user.role !== 'MANAGER') {
+            where.warehouse_id = { [Op.in]: req.user.allowedWarehouses };
         }
 
 
@@ -774,16 +892,30 @@ exports.getDailyReport = async (req, res) => {
         let wholesalePaymentWhere = sequelize.where(sequelize.fn('date', sequelize.fn('timezone', tz, sequelize.col('payment_date'))), dateStr);
         let purchasePaymentWhere = sequelize.where(sequelize.fn('date', sequelize.fn('timezone', tz, sequelize.col('payment_date'))), dateStr);
         let transferPaymentWhere = sequelize.where(sequelize.fn('date', sequelize.fn('timezone', tz, sequelize.col('payment_date'))), dateStr);
-        let expenseWhere = sequelize.where(sequelize.fn('date', sequelize.fn('timezone', tz, sequelize.col('createdAt'))), dateStr);
+        let expenseWhere = sequelize.where(sequelize.fn('date', sequelize.fn('timezone', tz, sequelize.col('expense_date'))), dateStr);
+        let incomeWhere = sequelize.where(sequelize.fn('date', sequelize.fn('timezone', tz, sequelize.col('income_date'))), dateStr);
+
 
         // Filter by warehouse if provided or if user is limited
-        const targetWH = warehouse_id || (req.user.role !== 'ADMIN' ? req.user.warehouse_id : null);
+        const targetWH = warehouse_id || req.query.warehouse_id;
+        let whFilter = null;
         if (targetWH) {
-            retailDateWhere = { [Op.and]: [retailDateWhere, { warehouse_id: targetWH }] };
-            wholesaleDateWhere = { [Op.and]: [wholesaleDateWhere, { warehouse_id: targetWH }] };
-            purchaseDateWhere = { [Op.and]: [purchaseDateWhere, { warehouse_id: targetWH }] };
-            expenseWhere = { [Op.and]: [expenseWhere, { warehouse_id: targetWH }] };
+            if (!req.user.allowedWarehouses.includes(targetWH)) {
+                return res.status(403).json({ message: "Bạn không có quyền xem báo cáo tại kho này" });
+            }
+            whFilter = { warehouse_id: targetWH };
+        } else if (req.user.role !== 'ADMIN' && req.user.role !== 'MANAGER') {
+            whFilter = { warehouse_id: { [Op.in]: req.user.allowedWarehouses } };
         }
+
+        if (whFilter) {
+            retailDateWhere = { [Op.and]: [retailDateWhere, whFilter] };
+            wholesaleDateWhere = { [Op.and]: [wholesaleDateWhere, whFilter] };
+            purchaseDateWhere = { [Op.and]: [purchaseDateWhere, whFilter] };
+            expenseWhere = { [Op.and]: [expenseWhere, whFilter] };
+            incomeWhere = { [Op.and]: [incomeWhere, whFilter] };
+        }
+
 
         // 1. RETAIL SALES SUMMARY
         const retailSales = await RetailSale.findAll({ 
@@ -820,10 +952,12 @@ exports.getDailyReport = async (req, res) => {
         
         const outflow = Number(purchaseInstantPaid || 0) + Number(purchaseInstallmentPaid || 0);
 
-        // 5. EXPENSES
+        // 5. EXPENSES & OTHER INCOMES
         const expensesTotal = await Expense.sum('amount', { where: expenseWhere });
+        const otherIncomesTotal = await Income.sum('amount', { where: incomeWhere });
 
         // 6. MAINTENANCE SUMMARY
+
         let maintenanceDateWhere = sequelize.where(sequelize.fn('date', sequelize.fn('timezone', tz, sequelize.col('maintenance_date'))), dateStr);
         if (targetWH) maintenanceDateWhere = { [Op.and]: [maintenanceDateWhere, { warehouse_id: targetWH }] };
 
@@ -845,17 +979,19 @@ exports.getDailyReport = async (req, res) => {
             });
         });
 
-        // 7. COLLECTIONS (Cash In) - Update to include maintenance
+        // 7. COLLECTIONS (Cash In) - Update to include maintenance & other incomes
         const maintenancePaid = maintenanceOrders.reduce((sum, o) => sum + Number(o.paid_amount || 0), 0);
-        const totalCollections = collections + maintenancePaid;
+        const totalCollections = collections + maintenancePaid + Number(otherIncomesTotal || 0);
+
 
         res.json({
             date: dateStr,
             metrics: {
-                totalRevenue: retailRevenue + wholesaleRevenue + maintenanceRevenue,
+                totalRevenue: retailRevenue + wholesaleRevenue + maintenanceRevenue + Number(otherIncomesTotal || 0),
                 retailRevenue,
                 wholesaleRevenue,
                 maintenanceRevenue,
+                otherIncomeRevenue: Number(otherIncomesTotal || 0),
                 retailCount,
                 wholesaleCount,
                 maintenanceCount,
@@ -872,9 +1008,11 @@ exports.getDailyReport = async (req, res) => {
                 collections: totalCollections,
                 purchasesPaid: outflow,
                 expenses: expensesTotal || 0,
+                otherIncomes: Number(otherIncomesTotal || 0),
                 netCashFlow: totalCollections - (outflow + (expensesTotal || 0))
             }
         });
+
 
     } catch (e) {
         res.status(500).json({ message: e.message });
@@ -894,9 +1032,11 @@ exports.getPartInventoryReport = async (req, res) => {
             ];
         }
 
-        const targetWH = warehouse_id || (req.user.role !== 'ADMIN' ? req.user.warehouse_id : null);
+        const targetWH = warehouse_id || req.query.warehouse_id;
         if (targetWH) {
             where.warehouse_id = targetWH;
+        } else if (req.user.role !== 'ADMIN' && req.user.role !== 'MANAGER') {
+            where.warehouse_id = { [Op.in]: req.user.allowedWarehouses };
         }
 
         // 1. Fetch all relevant parts
@@ -909,7 +1049,7 @@ exports.getPartInventoryReport = async (req, res) => {
         // 2. Fetch all raw inventory records for the target warehouse
         const rawInventory = await PartInventory.findAll({
             where,
-            include: [{ model: Warehouse, attributes: ['warehouse_name'] }]
+            include: [{ model: Warehouse, attributes: ['warehouse_name', 'address', 'location', 'phone', 'mobile'] }]
         });
 
         // 3. Map inventory for quick lookup
@@ -976,13 +1116,25 @@ exports.getPartPurchasesReport = async (req, res) => {
         let where = {};
         
         if (from_date && to_date) {
-            where.purchase_date = { [Op.between]: [dayjs(from_date).startOf('day').toDate(), dayjs(to_date).endOf('day').toDate()] };
+            where[Op.and] = [
+                sequelize.where(
+                    sequelize.fn('date', sequelize.fn('timezone', 'Asia/Ho_Chi_Minh', sequelize.col('purchase_date'))),
+                    { [Op.between]: [from_date, to_date] }
+                )
+            ];
         }
 
         if (supplier_id) where.supplier_id = supplier_id;
 
-        const targetWH = warehouse_id || (req.user.role !== 'ADMIN' ? req.user.warehouse_id : null);
-        if (targetWH) where.warehouse_id = targetWH;
+        const targetWH = warehouse_id || req.query.warehouse_id;
+        if (targetWH) {
+            if (!req.user.allowedWarehouses.includes(targetWH)) {
+                return res.status(403).json({ message: "Bạn không có quyền xem báo cáo tại kho này" });
+            }
+            where.warehouse_id = targetWH;
+        } else if (req.user.role !== 'ADMIN' && req.user.role !== 'MANAGER') {
+            where.warehouse_id = { [Op.in]: req.user.allowedWarehouses };
+        }
 
         let itemWhere = {};
         if (query) {
@@ -1003,7 +1155,7 @@ exports.getPartPurchasesReport = async (req, res) => {
             where,
             include: [
                 { model: Supplier, attributes: ['name'] },
-                { model: Warehouse, attributes: ['warehouse_name'] },
+                { model: Warehouse, attributes: ['warehouse_name', 'address', 'location', 'phone', 'mobile'] },
                 { model: User, as: 'creator', attributes: ['full_name'] },
                 { 
                     model: PartPurchaseItem, 
@@ -1031,8 +1183,15 @@ exports.getPartImportSummaryReport = async (req, res) => {
         }
         if (supplier_id) purchaseWhere.supplier_id = supplier_id;
 
-        const targetWH = warehouse_id || (req.user.role !== 'ADMIN' ? req.user.warehouse_id : null);
-        if (targetWH) purchaseWhere.warehouse_id = targetWH;
+        const targetWH = warehouse_id || req.query.warehouse_id;
+        if (targetWH) {
+            if (!req.user.allowedWarehouses.includes(targetWH)) {
+                return res.status(403).json({ message: "Bạn không có quyền xem báo cáo tại kho này" });
+            }
+            purchaseWhere.warehouse_id = targetWH;
+        } else if (req.user.role !== 'ADMIN' && req.user.role !== 'MANAGER') {
+            purchaseWhere.warehouse_id = { [Op.in]: req.user.allowedWarehouses };
+        }
 
         let partFilter = query ? {
             [Op.or]: [
@@ -1087,13 +1246,25 @@ exports.getPartSalesReport = async (req, res) => {
         let where = {};
 
         if (from_date && to_date) {
-            where.sale_date = { [Op.between]: [dayjs(from_date).startOf('day').toDate(), dayjs(to_date).endOf('day').toDate()] };
+            where[Op.and] = [
+                sequelize.where(
+                    sequelize.fn('date', sequelize.fn('timezone', 'Asia/Ho_Chi_Minh', sequelize.col('sale_date'))),
+                    { [Op.between]: [from_date, to_date] }
+                )
+            ];
         }
 
         if (sale_type) where.sale_type = sale_type;
 
-        const targetWH = warehouse_id || (req.user.role !== 'ADMIN' ? req.user.warehouse_id : null);
-        if (targetWH) where.warehouse_id = targetWH;
+        const targetWH = warehouse_id || req.query.warehouse_id;
+        if (targetWH) {
+            if (!req.user.allowedWarehouses.includes(targetWH)) {
+                return res.status(403).json({ message: "Bạn không có quyền xem báo cáo tại kho này" });
+            }
+            where.warehouse_id = targetWH;
+        } else if (req.user.role !== 'ADMIN' && req.user.role !== 'MANAGER') {
+            where.warehouse_id = { [Op.in]: req.user.allowedWarehouses };
+        }
 
         let itemWhere = {};
         if (query) {
@@ -1112,7 +1283,7 @@ exports.getPartSalesReport = async (req, res) => {
         const sales = await PartSale.findAll({
             where,
             include: [
-                { model: Warehouse, attributes: ['warehouse_name'] },
+                { model: Warehouse, attributes: ['warehouse_name', 'address', 'location', 'phone', 'mobile'] },
                 { model: User, as: 'creator', attributes: ['full_name'] },
                 { 
                     model: PartSaleItem, 
@@ -1149,10 +1320,16 @@ exports.getPartUsageReport = async (req, res) => {
             ));
         }
 
-        const targetWH = warehouse_id || (req.user.role !== 'ADMIN' ? req.user.warehouse_id : null);
+        const targetWH = warehouse_id || req.query.warehouse_id;
         if (targetWH) {
+            if (!req.user.allowedWarehouses.includes(targetWH)) {
+                return res.status(403).json({ message: "Bạn không có quyền xem báo cáo tại kho này" });
+            }
             maintenanceConds.push({ '$MaintenanceOrder.warehouse_id$': targetWH });
             saleConds.push({ '$PartSale.warehouse_id$': targetWH });
+        } else if (req.user.role !== 'ADMIN' && req.user.role !== 'MANAGER') {
+            maintenanceConds.push({ '$MaintenanceOrder.warehouse_id$': { [Op.in]: req.user.allowedWarehouses } });
+            saleConds.push({ '$PartSale.warehouse_id$': { [Op.in]: req.user.allowedWarehouses } });
         }
 
         const partFilter = query ? {
@@ -1234,6 +1411,172 @@ exports.getPartUsageReport = async (req, res) => {
 
         res.json(Object.values(reportMap).sort((a,b) => a.code.localeCompare(b.code)));
 
+    } catch (e) {
+        res.status(500).json({ message: e.message });
+    }
+};
+
+exports.getMaintenanceReport = async (req, res) => {
+    try {
+        const { from_date, to_date, warehouse_id, query } = req.query;
+        let where = {};
+        const tz = 'Asia/Ho_Chi_Minh';
+
+        if (from_date && to_date) {
+            where[Op.and] = [
+                sequelize.where(
+                    sequelize.fn('date', sequelize.fn('timezone', tz, sequelize.col('maintenance_date'))),
+                    { [Op.between]: [from_date, to_date] }
+                )
+            ];
+        }
+
+        const targetWH = warehouse_id || req.query.warehouse_id;
+        if (targetWH) {
+            if (!req.user.allowedWarehouses.includes(targetWH)) {
+                return res.status(403).json({ message: "Bạn không có quyền xem báo cáo tại kho này" });
+            }
+            where.warehouse_id = targetWH;
+        } else if (req.user.role !== 'ADMIN' && req.user.role !== 'MANAGER') {
+            where.warehouse_id = { [Op.in]: req.user.allowedWarehouses };
+        }
+
+        if (query) {
+            where[Op.or] = [
+                { customer_name: { [Op.iLike]: `%${query}%` } },
+                { customer_phone: { [Op.iLike]: `%${query}%` } },
+                { license_plate: { [Op.iLike]: `%${query}%` } },
+                { engine_no: { [Op.iLike]: `%${query}%` } },
+                { chassis_no: { [Op.iLike]: `%${query}%` } }
+            ];
+        }
+
+        const orders = await MaintenanceOrder.findAll({
+            where,
+            include: [
+                { model: Warehouse, attributes: ['warehouse_name', 'address', 'location', 'phone', 'mobile'] },
+                { model: User, as: 'creator', attributes: ['full_name'] },
+                { model: MaintenanceItem, include: [Part] }
+            ],
+            order: [['maintenance_date', 'DESC'], ['createdAt', 'DESC']]
+        });
+
+        res.json(orders);
+    } catch (e) {
+        res.status(500).json({ message: e.message });
+    }
+};
+
+exports.getPartTransferReport = async (req, res) => {
+    try {
+        const PartTransfer = require('../models/PartTransfer');
+        const PartTransferItem = require('../models/PartTransferItem');
+        const { from_date, to_date, warehouse_id, status } = req.query;
+        let where = {};
+
+        if (from_date && to_date) {
+            const start = dayjs(from_date).startOf('day').toDate();
+            const end = dayjs(to_date).endOf('day').toDate();
+            where.createdAt = { [Op.between]: [start, end] };
+        }
+
+        if (status) {
+            where.status = status;
+        }
+
+        // Warehouse permission logic
+        if (warehouse_id) {
+            where[Op.or] = [
+                { from_warehouse_id: warehouse_id },
+                { to_warehouse_id: warehouse_id }
+            ];
+        } else if (req.user.role !== 'ADMIN' && req.user.role !== 'MANAGER') {
+            where[Op.or] = [
+                { from_warehouse_id: { [Op.in]: req.user.allowedWarehouses } },
+                { to_warehouse_id: { [Op.in]: req.user.allowedWarehouses } }
+            ];
+        }
+
+        const transfers = await PartTransfer.findAll({
+            where,
+            include: [
+                { model: Warehouse, as: 'FromWarehouse', attributes: ['warehouse_name'] },
+                { model: Warehouse, as: 'ToWarehouse', attributes: ['warehouse_name'] },
+                { model: User, as: 'creator', attributes: ['full_name'] },
+                { 
+                    model: PartTransferItem, 
+                    include: [{ model: Part, attributes: ['code', 'name', 'unit'] }] 
+                }
+            ],
+            order: [['createdAt', 'DESC']]
+        });
+
+        res.json(transfers);
+    } catch (e) {
+        res.status(500).json({ message: e.message });
+    }
+};
+
+exports.getPartTransferSummaryReport = async (req, res) => {
+    try {
+        const { from_date, to_date, warehouse_id } = req.query;
+        const PartTransfer = require('../models/PartTransfer');
+        const PartTransferItem = require('../models/PartTransferItem');
+
+        let where = { status: 'RECEIVED' }; // Only count completed transfers
+        if (from_date && to_date) {
+            where.createdAt = { [Op.between]: [dayjs(from_date).startOf('day').toDate(), dayjs(to_date).endOf('day').toDate()] };
+        }
+
+        const transfers = await PartTransfer.findAll({
+            where,
+            include: [{
+                model: PartTransferItem,
+                include: [{ model: Part, attributes: ['code', 'name', 'unit'] }]
+            }]
+        });
+
+        const summaryMap = {};
+
+        transfers.forEach(t => {
+            t.PartTransferItems.forEach(item => {
+                const partId = item.part_id;
+                const partInfo = item.Part;
+                const qty = Number(item.quantity || 0);
+
+                if (!summaryMap[partId]) {
+                    summaryMap[partId] = {
+                        code: partInfo?.code || 'N/A',
+                        name: partInfo?.name || 'N/A',
+                        unit: partInfo?.unit || 'N/A',
+                        total_in: 0,
+                        total_out: 0
+                    };
+                }
+
+                // If warehouse_id is filtered, check if it's the sender or receiver
+                if (warehouse_id) {
+                    if (t.from_warehouse_id === warehouse_id) {
+                        summaryMap[partId].total_out += qty;
+                    }
+                    if (t.to_warehouse_id === warehouse_id) {
+                        summaryMap[partId].total_in += qty;
+                    }
+                } else {
+                    // If no warehouse filter, we just count total movement
+                    summaryMap[partId].total_out += qty;
+                    summaryMap[partId].total_in += qty;
+                }
+            });
+        });
+
+        // Filter out parts that don't belong to the warehouse if warehouse_id is provided
+        let result = Object.values(summaryMap);
+        if (warehouse_id) {
+            result = result.filter(item => item.total_in > 0 || item.total_out > 0);
+        }
+
+        res.json(result.sort((a, b) => a.code.localeCompare(b.code)));
     } catch (e) {
         res.status(500).json({ message: e.message });
     }

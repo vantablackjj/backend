@@ -29,6 +29,8 @@ const TransferLog = require('./models/TransferLog');
 const Notification = require('./models/Notification');
 const TransferPayment = require('./models/TransferPayment');
 const RetailPayment = require('./models/RetailPayment');
+const Income = require('./models/Income');
+
 
 // NEW Spare Parts & Maintenance Models
 const Part = require('./models/Part');
@@ -41,6 +43,7 @@ const MaintenanceOrder = require('./models/MaintenanceOrder');
 const MaintenanceItem = require('./models/MaintenanceItem');
 const Mechanic = require('./models/Mechanic');
 const LiftTable = require('./models/LiftTable');
+const MaintenanceRule = require('./models/MaintenanceRule');
 
 // Gift Management Models
 const Gift = require('./models/Gift');
@@ -99,6 +102,13 @@ Vehicle.hasMany(Expense, { as: 'expenses', foreignKey: 'vehicle_id' });
 Expense.belongsTo(Warehouse, { foreignKey: 'warehouse_id' });
 Warehouse.hasMany(Expense, { foreignKey: 'warehouse_id' });
 
+// 7b. Incomes
+Income.belongsTo(Vehicle, { as: 'related_vehicle', foreignKey: 'vehicle_id' });
+Vehicle.hasMany(Income, { as: 'incomes', foreignKey: 'vehicle_id' });
+Income.belongsTo(Warehouse, { foreignKey: 'warehouse_id' });
+Warehouse.hasMany(Income, { foreignKey: 'warehouse_id' });
+
+
 Purchase.belongsTo(User, { as: 'creator', foreignKey: 'created_by' });
 Purchase.belongsTo(Warehouse, { foreignKey: 'warehouse_id' });
 
@@ -122,6 +132,7 @@ PartSaleItem.belongsTo(PartSale, { foreignKey: 'sale_id' });
 PartSaleItem.belongsTo(Part, { foreignKey: 'part_id' });
 
 MaintenanceOrder.belongsTo(Vehicle, { foreignKey: 'vehicle_id' });
+Vehicle.hasMany(MaintenanceOrder, { foreignKey: 'vehicle_id' });
 MaintenanceOrder.belongsTo(Warehouse, { foreignKey: 'warehouse_id' });
 MaintenanceOrder.belongsTo(User, { as: 'creator', foreignKey: 'created_by' });
 MaintenanceOrder.belongsTo(Mechanic, { as: 'mechanic1', foreignKey: 'mechanic_1_id' });
@@ -167,8 +178,9 @@ Gift.hasMany(GiftTransaction, { foreignKey: 'gift_id' });
 const masterDataRoutes = require('./routes/masterData');
 const businessRoutes = require('./routes/business');
 const authRoutes = require('./routes/auth'); // MỚI
-const { verifyToken, isAdmin } = require('./middleware/authMiddleware'); // MỚI
+const { verifyToken, isAdmin, isPowerUser } = require('./middleware/authMiddleware'); // MỚI
 const { seedAdmin } = require('./controllers/AuthController'); // MỚI
+const fixDatabaseSchema = require('./fixDb');
 
 const app = express();
 const server = http.createServer(app);
@@ -233,10 +245,11 @@ app.use('/api', verifyToken, masterDataRoutes);
 app.use('/api', verifyToken, businessRoutes);
 app.use('/api/reports', verifyToken, require('./routes/reportRoutes'));
 app.use('/api/notifications', verifyToken, require('./routes/notificationRoutes'));
-app.use('/api/dashboard', verifyToken, isAdmin, require('./routes/dashboardRoutes'));
+app.use('/api/dashboard', verifyToken, isPowerUser, require('./routes/dashboardRoutes'));
 app.use('/api', verifyToken, require('./routes/partRoutes'));
 app.use('/api/import', verifyToken, require('./routes/importRoutes'));
 app.use('/api/gifts', verifyToken, require('./routes/giftRoutes'));
+app.use('/api/system', verifyToken, isAdmin, require('./routes/systemRoutes'));
 
 
 app.get('/', (req, res) => {
@@ -249,8 +262,12 @@ const startServer = async () => {
     await sequelize.authenticate();
     console.log('✅ Kết nối PostgreSQL thành công.');
 
+    // Vá cấu trúc DB nếu thiếu cột hoặc enum
+    await fixDatabaseSchema();
+
     // Sync all models 
     await sequelize.sync({ alter: true });
+
     console.log('✅ Các bảng đã được đồng bộ hóa.');
 
     // Khởi tạo Admin đầu tiên nếu DB trống
@@ -259,6 +276,8 @@ const startServer = async () => {
     server.listen(PORT, () => {
       console.log(`🚀 Server đang chạy tại: http://localhost:${PORT}`);
     });
+    // Tăng timeout lên 10 phút để tránh kill request backup/restore lâu
+    server.timeout = 10 * 60 * 1000;
   } catch (error) {
     console.error('❌ Lỗi khi khởi động server:', error.message);
   }

@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const Warehouse = require('../models/Warehouse');
 
 // Middleware xác thực Token (Kiểm tra xem đã đăng nhập chưa)
 exports.verifyToken = async (req, res, next) => {
@@ -12,6 +13,17 @@ exports.verifyToken = async (req, res, next) => {
     const user = await User.findByPk(decoded.id);
 
     if (!user) return res.status(401).json({ message: 'Tài khoản không tồn tại!' });
+    
+    // Xử lý danh sách kho được phép truy cập
+    let allowed = [user.warehouse_id];
+    if (user.role === 'ADMIN' || user.role === 'MANAGER') {
+      const allWarehouses = await Warehouse.findAll({ attributes: ['id'] });
+      allowed = allWarehouses.map(w => w.id);
+    } else if (user.accessible_warehouses) {
+      const others = user.accessible_warehouses.split(',').filter(id => id.trim() !== '');
+      allowed.push(...others);
+    }
+    user.allowedWarehouses = Array.from(new Set(allowed.filter(Boolean)));
 
     // Đính kèm thông tin người dùng vào yêu cầu để dùng ở các bước sau
     req.user = user;
@@ -29,6 +41,24 @@ exports.isAdmin = (req, res, next) => {
     return res.status(403).json({ message: 'Bạn không có quyền thực hiện hành động này! (Yêu cầu quyền Admin)' });
   }
 };
+
+// Middleware kiểm tra quyền DUYỆT CHUYỂN KHO (Admin hoặc Staff có quyền)
+exports.canApproveTransfer = (req, res, next) => {
+  if (req.user && (req.user.role === 'ADMIN' || req.user.role === 'MANAGER' || req.user.can_approve_transfer)) {
+    next();
+  } else {
+    return res.status(403).json({ message: 'Bạn không có quyền thực hiện hành động này! (Yêu cầu quyền Duyệt chuyển kho)' });
+  }
+};
+
+// Middleware kiểm tra quyền ADMIN hoặc MANAGER (Nhân viên tổng bộ)
+exports.isPowerUser = (req, res, next) => {
+  if (req.user && (req.user.role === 'ADMIN' || req.user.role === 'MANAGER')) {
+    next();
+  } else {
+    return res.status(403).json({ message: 'Bạn không có quyền thực hiện hành động này!' });
+  }
+};
 // Middleware kiểm tra quyền QUẢN LÝ CÔNG NỢ (Admin hoặc Staff có quyền)
 exports.canManageDebt = (req, res, next) => {
   if (req.user && (req.user.role === 'ADMIN' || req.user.can_manage_debt)) {
@@ -44,6 +74,24 @@ exports.canDelete = (req, res, next) => {
     next();
   } else {
     return res.status(403).json({ message: 'Bạn không có quyền thực hiện hành động này! (Yêu cầu quyền Hủy đơn/Xóa)' });
+  }
+};
+
+// Middleware kiểm tra quyền XÓA PHIẾU (Admin hoặc Staff có quyền)
+exports.canDeleteTicket = (req, res, next) => {
+  if (req.user && (req.user.role === 'ADMIN' || req.user.can_delete_ticket)) {
+    next();
+  } else {
+    return res.status(403).json({ message: 'Bạn không có quyền thực hiện hành động này! (Yêu cầu quyền Xóa phiếu)' });
+  }
+};
+
+// Middleware kiểm tra quyền SỬA PHIẾU (Admin hoặc Staff có quyền)
+exports.canEditTicket = (req, res, next) => {
+  if (req.user && (req.user.role === 'ADMIN' || req.user.can_edit_ticket)) {
+    next();
+  } else {
+    return res.status(403).json({ message: 'Bạn không có quyền thực hiện hành động này! (Yêu cầu quyền Sửa phiếu)' });
   }
 };
 

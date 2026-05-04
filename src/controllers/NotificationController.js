@@ -10,7 +10,7 @@ exports.getAll = async (req, res) => {
     // Role-based filtering: 
     // ADMIN sees all. 
     // STAFF sees their warehouse notifications AND filtered categories.
-    if (req.user.role !== 'ADMIN') {
+    if (req.user.role !== 'ADMIN' && req.user.role !== 'MANAGER') {
         where.warehouse_id = req.user.warehouse_id;
 
         // Granular permission filtering

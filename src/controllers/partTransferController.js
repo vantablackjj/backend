@@ -9,6 +9,7 @@ const User = require('../models/User');
 const { Op } = require('sequelize');
 const sequelize = require('../config/database');
 const { sendNotification } = require('../utils/notificationHelper');
+const dayjs = require('dayjs');
 
 // Helper to generate Code (PTF-2026-0001)
 const generateCode = async () => {
@@ -22,10 +23,13 @@ const generateCode = async () => {
 exports.requestTransfer = async (req, res) => {
     const t = await sequelize.transaction();
     try {
-        const { from_warehouse_id, to_warehouse_id, items, notes } = req.body;
+        const { from_warehouse_id, to_warehouse_id, items, notes, transfer_date } = req.body;
         const user_id = req.user.id;
 
-        const activeFromWH = (req.user.role === 'ADMIN' && from_warehouse_id) ? from_warehouse_id : req.user.warehouse_id;
+        const activeFromWH = from_warehouse_id || req.user.warehouse_id;
+        if (!req.user.allowedWarehouses.includes(activeFromWH)) {
+            return res.status(403).json({ message: "Bạn không có quyền thực hiện tại kho xuất này" });
+        }
 
         if (activeFromWH === to_warehouse_id) {
             throw new Error('Kho xuất và kho nhận không được trùng nhau!');
@@ -37,6 +41,7 @@ exports.requestTransfer = async (req, res) => {
             from_warehouse_id: activeFromWH,
             to_warehouse_id,
             notes,
+            transfer_date: transfer_date || dayjs().format('YYYY-MM-DD'),
             created_by: user_id,
             status: 'PENDING_ADMIN'
         }, { transaction: t });
@@ -101,9 +106,12 @@ exports.approveTransfer = async (req, res) => {
     const t = await sequelize.transaction();
     try {
         const { id } = req.params;
-        const transfer = await PartTransfer.findByPk(id);
+        
+        // Sử dụng LOCK.UPDATE để bảo vệ trạng thái phiếu
+        const transfer = await PartTransfer.findByPk(id, { transaction: t, lock: t.LOCK.UPDATE });
+
         if (!transfer || transfer.status !== 'PENDING_ADMIN') {
-            throw new Error('Phiếu không hợp lệ hoặc đã xử lý!');
+            throw new Error('Phiếu không hợp lệ hoặc đã xử lý (có thể do ấn nhầm nhiều lần)!');
         }
 
         transfer.status = 'ADMIN_APPROVED';
@@ -144,7 +152,18 @@ exports.receiveTransfer = async (req, res) => {
     const t = await sequelize.transaction();
     try {
         const { id } = req.params;
-        const transfer = await PartTransfer.findByPk(id, { include: [PartTransferItem] });
+        
+        // Sử dụng LOCK.UPDATE để bảo vệ trạng thái phiếu khi nhận hàng
+        const transfer = await PartTransfer.findByPk(id, { 
+            transaction: t, 
+            lock: t.LOCK.UPDATE 
+        });
+
+        const items = await PartTransferItem.findAll({
+            where: { transfer_id: id },
+            transaction: t
+        });
+
         if (!transfer || transfer.status !== 'ADMIN_APPROVED') {
             throw new Error('Phiếu chưa được duyệt hoặc đã nhận rồi!');
         }
@@ -159,7 +178,7 @@ exports.receiveTransfer = async (req, res) => {
         await transfer.save({ transaction: t });
 
         // Add to target warehouse inventory
-        for (const item of transfer.PartTransferItems) {
+        for (const item of items) {
             const [inventory, created] = await PartInventory.findOrCreate({
                 where: { part_id: item.part_id, warehouse_id: transfer.to_warehouse_id },
                 defaults: { quantity: 0 },
@@ -201,7 +220,22 @@ exports.cancelTransfer = async (req, res) => {
     const t = await sequelize.transaction();
     try {
         const { id } = req.params;
-        const transfer = await PartTransfer.findByPk(id, { include: [PartTransferItem] });
+        
+        // Sử dụng LOCK.UPDATE để bảo vệ trạng thái phiếu khi hủy
+        const transfer = await PartTransfer.findByPk(id, { 
+            transaction: t, 
+            lock: t.LOCK.UPDATE 
+        });
+
+        const items = await PartTransferItem.findAll({
+            where: { transfer_id: id },
+            transaction: t
+        });
+
+        if (!transfer) {
+            throw new Error('Không tìm thấy phiếu chuyển!');
+        }
+
         if (transfer.status === 'RECEIVED' || transfer.status === 'CANCELLED') {
             throw new Error('Phiếu đã hoàn tất hoặc đã hủy trước đó!');
         }
@@ -214,7 +248,7 @@ exports.cancelTransfer = async (req, res) => {
         await transfer.save({ transaction: t });
 
         // Restore quantity to source warehouse
-        for (const item of transfer.PartTransferItems) {
+        for (const item of items) {
             const inventory = await PartInventory.findOne({
                 where: { part_id: item.part_id, warehouse_id: transfer.from_warehouse_id },
                 transaction: t
@@ -260,13 +294,39 @@ exports.cancelTransfer = async (req, res) => {
 
 exports.getTransfers = async (req, res) => {
     try {
+        const { from_date, to_date, warehouse_id, status } = req.query;
         const where = {};
-        if (req.user.role !== 'ADMIN') {
+
+        if (from_date && to_date) {
+            where.transfer_date = { [Op.between]: [from_date, to_date] };
+        }
+
+        if (status) {
+            where.status = status;
+        }
+
+        if (req.user.role !== 'ADMIN' && req.user.role !== 'MANAGER') {
+            const allowed = req.user.allowedWarehouses;
+            if (warehouse_id) {
+                if (!allowed.includes(warehouse_id)) {
+                    return res.status(403).json({ message: "Bạn không có quyền xem dữ liệu kho này" });
+                }
+                where[Op.and] = [
+                    { [Op.or]: [{ from_warehouse_id: warehouse_id }, { to_warehouse_id: warehouse_id }] }
+                ];
+            } else {
+                where[Op.or] = [
+                    { from_warehouse_id: { [Op.in]: allowed } },
+                    { to_warehouse_id: { [Op.in]: allowed } }
+                ];
+            }
+        } else if (warehouse_id) {
             where[Op.or] = [
-                { from_warehouse_id: req.user.warehouse_id },
-                { to_warehouse_id: req.user.warehouse_id }
+                { from_warehouse_id: warehouse_id },
+                { to_warehouse_id: warehouse_id }
             ];
         }
+
         const list = await PartTransfer.findAll({
             where,
             include: [
