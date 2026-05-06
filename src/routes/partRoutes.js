@@ -25,6 +25,7 @@ router.get('/maintenance-orders', canManageSpareParts, partController.getMainten
 
 // Debt Management
 router.get('/part-purchases', canManageSpareParts, partController.getPartPurchases);
+router.put('/part-purchase/:id', canEditTicket, partController.updatePartPurchase);
 router.delete('/part-purchase/:id', canDelete, partController.deletePartPurchase);
 router.get('/part-sales', canManageSpareParts, partController.getPartSales);
 router.delete('/part-sales/:id', canDelete, partController.deletePartSale);

@@ -23,6 +23,7 @@ router.get('/parts/purchases-summary', canManageSpareParts, reportController.get
 router.get('/parts/sales', canManageSpareParts, reportController.getPartSalesReport);
 router.get('/parts/usage', canManageSpareParts, reportController.getPartUsageReport);
 router.get('/parts/transfers', canManageSpareParts, reportController.getPartTransferReport);
+router.get('/parts/transfers/export-monthly', canManageSpareParts, reportController.exportPartTransferMonthlyReport);
 router.get('/parts/transfers-summary', canManageSpareParts, reportController.getPartTransferSummaryReport);
 router.get('/maintenance', canManageSpareParts, reportController.getMaintenanceReport);
 

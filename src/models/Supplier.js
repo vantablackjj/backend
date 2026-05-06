@@ -22,6 +22,10 @@ const Supplier = sequelize.define('Supplier', {
   payment_type: {
     type: DataTypes.ENUM('Trả gộp', 'Trả theo lô'),
     defaultValue: 'Trả gộp'
+  },
+  type: {
+    type: DataTypes.ENUM('VEHICLE', 'PART', 'BOTH'),
+    defaultValue: 'BOTH'
   }
 }, {
   timestamps: true

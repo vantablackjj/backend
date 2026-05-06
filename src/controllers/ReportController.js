@@ -35,6 +35,7 @@ const timezone = require('dayjs/plugin/timezone');
 dayjs.extend(utc);
 dayjs.extend(timezone);
 dayjs.tz.setDefault('Asia/Ho_Chi_Minh');
+const exceljs = require('exceljs');
 
 exports.getVehicleLifecycle = async (req, res) => {
     try {
@@ -1475,9 +1476,7 @@ exports.getPartTransferReport = async (req, res) => {
         let where = {};
 
         if (from_date && to_date) {
-            const start = dayjs(from_date).startOf('day').toDate();
-            const end = dayjs(to_date).endOf('day').toDate();
-            where.createdAt = { [Op.between]: [start, end] };
+            where.transfer_date = { [Op.between]: [from_date, to_date] };
         }
 
         if (status) {
@@ -1485,15 +1484,16 @@ exports.getPartTransferReport = async (req, res) => {
         }
 
         // Warehouse permission logic
-        if (warehouse_id) {
-            where[Op.or] = [
-                { from_warehouse_id: warehouse_id },
-                { to_warehouse_id: warehouse_id }
+        if (warehouse_id && warehouse_id !== 'undefined' && warehouse_id !== '') {
+            where[Op.and] = [
+                { [Op.or]: [{ from_warehouse_id: warehouse_id }, { to_warehouse_id: warehouse_id }] }
             ];
         } else if (req.user.role !== 'ADMIN' && req.user.role !== 'MANAGER') {
-            where[Op.or] = [
-                { from_warehouse_id: { [Op.in]: req.user.allowedWarehouses } },
-                { to_warehouse_id: { [Op.in]: req.user.allowedWarehouses } }
+            where[Op.and] = [
+                { [Op.or]: [
+                    { from_warehouse_id: { [Op.in]: req.user.allowedWarehouses } },
+                    { to_warehouse_id: { [Op.in]: req.user.allowedWarehouses } }
+                ] }
             ];
         }
 
@@ -1570,14 +1570,325 @@ exports.getPartTransferSummaryReport = async (req, res) => {
             });
         });
 
-        // Filter out parts that don't belong to the warehouse if warehouse_id is provided
-        let result = Object.values(summaryMap);
-        if (warehouse_id) {
-            result = result.filter(item => item.total_in > 0 || item.total_out > 0);
-        }
-
         res.json(result.sort((a, b) => a.code.localeCompare(b.code)));
     } catch (e) {
+        res.status(500).json({ message: e.message });
+    }
+};
+
+exports.exportPartTransferMonthlyReport = async (req, res) => {
+    try {
+        const { from_date, to_date, warehouse_id } = req.query;
+        if (!warehouse_id) return res.status(400).json({ message: 'Vui lòng chọn kho để xuất báo cáo!' });
+
+        const selectedWH = await Warehouse.findByPk(warehouse_id);
+        if (!selectedWH) return res.status(404).json({ message: 'Không tìm thấy kho!' });
+
+        // 1. Fetch transfers first to see which other warehouses are involved
+        let where = {
+            status: 'RECEIVED',
+            [Op.or]: [
+                { from_warehouse_id: warehouse_id },
+                { to_warehouse_id: warehouse_id }
+            ]
+        };
+        
+        if (from_date && to_date) {
+            where.transfer_date = { [Op.between]: [from_date, to_date] };
+        }
+
+        const transfers = await PartTransfer.findAll({
+            where,
+            include: [
+                { model: PartTransferItem, include: [{ model: Part }] },
+                { model: Warehouse, as: 'FromWarehouse' },
+                { model: Warehouse, as: 'ToWarehouse' }
+            ],
+            order: [['transfer_date', 'ASC']]
+        });
+
+        // 2. Identify involved warehouses
+        const involvedWHIds = new Set();
+        transfers.forEach(t => {
+            if (t.from_warehouse_id !== warehouse_id) involvedWHIds.add(t.from_warehouse_id);
+            if (t.to_warehouse_id !== warehouse_id) involvedWHIds.add(t.to_warehouse_id);
+        });
+
+        const allWarehouses = await Warehouse.findAll({ 
+            where: { id: Array.from(involvedWHIds) },
+            order: [['warehouse_name', 'ASC']] 
+        });
+        const otherWarehouses = allWarehouses; // already filtered by involvedWHIds and excludes selected warehouse implicitly if not in set
+
+        // 3. Process data: group by date, part code, and price
+        const dataRows = [];
+        const categorySummary = {}; // { categoryName: { whId: { out: qty, in: qty, outVal: val, inVal: val } } }
+
+        transfers.forEach(t => {
+            const dateStr = dayjs(t.transfer_date).format('DD/MM/YYYY');
+            const isExport = t.from_warehouse_id === warehouse_id;
+            const otherWHId = isExport ? t.to_warehouse_id : t.from_warehouse_id;
+
+            t.PartTransferItems.forEach(item => {
+                const part = item.Part;
+                const qty = Number(item.quantity || 0);
+                const price = Number(item.purchase_price || part?.purchase_price || 0);
+                const val = qty * price;
+                const category = part?.description || 'Phụ tùng'; // Fallback if no category field
+
+                // Find or create row for this date/part/price
+                let row = dataRows.find(r => r.date === dateStr && r.code === part?.code && r.price === price);
+                if (!row) {
+                    row = {
+                        date: dateStr,
+                        code: part?.code || 'N/A',
+                        name: part?.name || 'N/A',
+                        price: price,
+                        category: category,
+                        exports: {}, // whId -> qty
+                        imports: {}, // whId -> qty
+                    };
+                    dataRows.push(row);
+                }
+
+                if (isExport) {
+                    row.exports[otherWHId] = (row.exports[otherWHId] || 0) + qty;
+                } else {
+                    row.imports[otherWHId] = (row.imports[otherWHId] || 0) + qty;
+                }
+
+                // Update category summary
+                if (!categorySummary[category]) categorySummary[category] = {};
+                if (!categorySummary[category][otherWHId]) {
+                    categorySummary[category][otherWHId] = { outQty: 0, inQty: 0, outVal: 0, inVal: 0 };
+                }
+                const s = categorySummary[category][otherWHId];
+                if (isExport) {
+                    s.outQty += qty;
+                    s.outVal += val;
+                } else {
+                    s.inQty += qty;
+                    s.inVal += val;
+                }
+            });
+        });
+
+        // 4. Create Excel
+        const workbook = new exceljs.Workbook();
+        const sheet = workbook.addWorksheet('Bao Cao');
+
+        // Header Style
+        const titleStyle = { font: { bold: true, size: 16 }, alignment: { horizontal: 'center' } };
+        const headerStyle = { font: { bold: true }, border: { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } }, alignment: { horizontal: 'center', vertical: 'middle', wrapText: true }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } } };
+        const dataStyle = { border: { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } } };
+
+        // Title
+        sheet.mergeCells(1, 1, 1, 7 + otherWarehouses.length * 2 + 7);
+        const titleCell = sheet.getCell(1, 1);
+        titleCell.value = `BÁO CÁO XUẤT - NHẬP NỘI BỘ HÀNG NGÀY ${selectedWH.warehouse_name.toUpperCase()} THÁNG ${dayjs(from_date).format('MM/YYYY')}`;
+        titleCell.style = titleStyle;
+
+        // Table Headers
+        // Row 2 & 3: Merge for columns
+        sheet.mergeCells(2, 1, 3, 1); sheet.getCell(2, 1).value = 'NGÀY';
+        sheet.mergeCells(2, 2, 3, 2); sheet.getCell(2, 2).value = 'MÃ PHỤ TÙNG';
+        sheet.mergeCells(2, 3, 3, 3); sheet.getCell(2, 3).value = 'TÊN PHỤ TÙNG';
+        
+        // Export columns (Qty)
+        sheet.mergeCells(2, 4, 2, 3 + otherWarehouses.length);
+        sheet.getCell(2, 4).value = 'XUẤT';
+        otherWarehouses.forEach((w, i) => {
+            sheet.getCell(3, 4 + i).value = w.warehouse_name;
+        });
+
+        // Import columns (Qty)
+        const importStartCol = 4 + otherWarehouses.length;
+        sheet.mergeCells(2, importStartCol, 2, importStartCol + otherWarehouses.length - 1);
+        sheet.getCell(2, importStartCol).value = 'NHẬP';
+        otherWarehouses.forEach((w, i) => {
+            sheet.getCell(3, importStartCol + i).value = w.warehouse_name;
+        });
+
+        const priceCol = importStartCol + otherWarehouses.length;
+        sheet.mergeCells(2, priceCol, 3, priceCol); sheet.getCell(2, priceCol).value = 'GIÁ NHẬP';
+        
+        const catCol = priceCol + 1;
+        sheet.mergeCells(2, catCol, 3, catCol); sheet.getCell(2, catCol).value = 'PHÂN LOẠI';
+
+        // Empty separator
+        const emptyCol = catCol + 1;
+        sheet.mergeCells(2, emptyCol, 3, emptyCol);
+
+        // Export columns (Value)
+        const exportValStartCol = emptyCol + 1;
+        sheet.mergeCells(2, exportValStartCol, 2, exportValStartCol + otherWarehouses.length - 1);
+        sheet.getCell(2, exportValStartCol).value = 'XUẤT (TIỀN)';
+        otherWarehouses.forEach((w, i) => {
+            sheet.getCell(3, exportValStartCol + i).value = w.warehouse_name;
+        });
+
+        // Import columns (Value)
+        const importValStartCol = exportValStartCol + otherWarehouses.length;
+        sheet.mergeCells(2, importValStartCol, 2, importValStartCol + otherWarehouses.length - 1);
+        sheet.getCell(2, importValStartCol).value = 'NHẬP (TIỀN)';
+        otherWarehouses.forEach((w, i) => {
+            sheet.getCell(3, importValStartCol + i).value = w.warehouse_name;
+        });
+
+        // Apply header styles
+        for (let r = 2; r <= 3; r++) {
+            for (let c = 1; c < importValStartCol + otherWarehouses.length; c++) {
+                sheet.getCell(r, c).style = headerStyle;
+            }
+        }
+
+        // --- CALC TOTALS FIRST (FOR TOP ROW) ---
+        let totalExportVal = 0;
+        let totalImportVal = 0;
+        const whTotals = {}; // whId -> { outVal, inVal }
+        otherWarehouses.forEach(w => whTotals[w.id] = { outVal: 0, inVal: 0 });
+
+        dataRows.forEach(row => {
+            otherWarehouses.forEach((w, i) => {
+                const outQty = row.exports[w.id] || 0;
+                const inQty = row.imports[w.id] || 0;
+                whTotals[w.id].outVal += outQty * row.price;
+                whTotals[w.id].inVal += inQty * row.price;
+                totalExportVal += outQty * row.price;
+                totalImportVal += inQty * row.price;
+            });
+        });
+
+        // --- GRAND TOTAL ROW (AT THE TOP) ---
+        const totalRowIdx = 4;
+        sheet.getRow(totalRowIdx).height = 25; // Thêm độ cao cho dòng tổng
+        sheet.getCell(totalRowIdx, 1).value = 'TỔNG CỘNG';
+        sheet.mergeCells(totalRowIdx, 1, totalRowIdx, 3);
+        const grandTotalStyle = { 
+            ...headerStyle, 
+            font: { bold: true, size: 12 }, 
+            fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFF00' } } // Màu vàng rực
+        };
+        sheet.getCell(totalRowIdx, 1).style = grandTotalStyle;
+
+        otherWarehouses.forEach((w, i) => {
+            // Qty totals (Optional)
+            sheet.getCell(totalRowIdx, 4 + i).style = dataStyle;
+            sheet.getCell(totalRowIdx, importStartCol + i).style = dataStyle;
+            
+            // Value totals
+            const outV = whTotals[w.id].outVal;
+            const inV = whTotals[w.id].inVal;
+            sheet.getCell(totalRowIdx, exportValStartCol + i).value = outV;
+            sheet.getCell(totalRowIdx, exportValStartCol + i).numFmt = '#,##0';
+            sheet.getCell(totalRowIdx, exportValStartCol + i).style = { ...dataStyle, font: { bold: true, size: 11 }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF0F0F0' } } };
+            
+            sheet.getCell(totalRowIdx, importValStartCol + i).value = inV;
+            sheet.getCell(totalRowIdx, importValStartCol + i).numFmt = '#,##0';
+            sheet.getCell(totalRowIdx, importValStartCol + i).style = { ...dataStyle, font: { bold: true, size: 11 }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF0F0F0' } } };
+        });
+        sheet.getCell(totalRowIdx, priceCol).style = dataStyle;
+        sheet.getCell(totalRowIdx, catCol).style = dataStyle;
+        sheet.getCell(totalRowIdx, emptyCol).style = dataStyle;
+
+        // --- DATA ROWS ---
+        let currentRowIdx = 5;
+        dataRows.forEach(row => {
+            sheet.getCell(currentRowIdx, 1).value = row.date;
+            sheet.getCell(currentRowIdx, 2).value = row.code;
+            sheet.getCell(currentRowIdx, 3).value = row.name;
+            
+            otherWarehouses.forEach((w, i) => {
+                const outQty = row.exports[w.id] || 0;
+                const inQty = row.imports[w.id] || 0;
+                sheet.getCell(currentRowIdx, 4 + i).value = outQty || null;
+                sheet.getCell(currentRowIdx, importStartCol + i).value = inQty || null;
+                
+                sheet.getCell(currentRowIdx, exportValStartCol + i).value = outQty ? outQty * row.price : null;
+                sheet.getCell(currentRowIdx, exportValStartCol + i).numFmt = '#,##0';
+                
+                sheet.getCell(currentRowIdx, importValStartCol + i).value = inQty ? inQty * row.price : null;
+                sheet.getCell(currentRowIdx, importValStartCol + i).numFmt = '#,##0';
+            });
+
+            sheet.getCell(currentRowIdx, priceCol).value = row.price;
+            sheet.getCell(currentRowIdx, priceCol).numFmt = '#,##0';
+            sheet.getCell(currentRowIdx, catCol).value = row.category;
+
+            // Styles
+            for (let c = 1; c < importValStartCol + otherWarehouses.length; c++) {
+                sheet.getCell(currentRowIdx, c).style = dataStyle;
+            }
+            currentRowIdx++;
+        });
+
+        // --- SUMMARY TABLE ON THE RIGHT ---
+        const summaryStartCol = importValStartCol + otherWarehouses.length + 2;
+        let summaryRowIdx = 2;
+        
+        // Summary Header
+        sheet.mergeCells(summaryRowIdx, summaryStartCol, summaryRowIdx, summaryStartCol + 2);
+        sheet.getCell(summaryRowIdx, summaryStartCol).value = 'BẢNG TỔNG HỢP THEO PHÂN LOẠI';
+        sheet.getCell(summaryRowIdx, summaryStartCol).style = headerStyle;
+        summaryRowIdx++;
+
+        sheet.getCell(summaryRowIdx, summaryStartCol).value = 'PHÂN LOẠI';
+        sheet.getCell(summaryRowIdx, summaryStartCol + 1).value = 'TỔNG XUẤT';
+        sheet.getCell(summaryRowIdx, summaryStartCol + 2).value = 'TỔNG NHẬP';
+        sheet.getCell(summaryRowIdx, summaryStartCol).style = headerStyle;
+        sheet.getCell(summaryRowIdx, summaryStartCol + 1).style = headerStyle;
+        sheet.getCell(summaryRowIdx, summaryStartCol + 2).style = headerStyle;
+        summaryRowIdx++;
+
+        const categories = Object.keys(categorySummary).sort();
+        let grandTotalOut = 0;
+        let grandTotalIn = 0;
+
+        categories.forEach(cat => {
+            let catOut = 0;
+            let catIn = 0;
+            Object.values(categorySummary[cat]).forEach(s => {
+                catOut += s.outVal;
+                catIn += s.inVal;
+            });
+            
+            sheet.getCell(summaryRowIdx, summaryStartCol).value = cat;
+            sheet.getCell(summaryRowIdx, summaryStartCol + 1).value = catOut;
+            sheet.getCell(summaryRowIdx, summaryStartCol + 1).numFmt = '#,##0';
+            sheet.getCell(summaryRowIdx, summaryStartCol + 2).value = catIn;
+            sheet.getCell(summaryRowIdx, summaryStartCol + 2).numFmt = '#,##0';
+            
+            sheet.getCell(summaryRowIdx, summaryStartCol).style = dataStyle;
+            sheet.getCell(summaryRowIdx, summaryStartCol + 1).style = dataStyle;
+            sheet.getCell(summaryRowIdx, summaryStartCol + 2).style = dataStyle;
+            
+            grandTotalOut += catOut;
+            grandTotalIn += catIn;
+            summaryRowIdx++;
+        });
+
+        // Summary Grand Total
+        sheet.getCell(summaryRowIdx, summaryStartCol).value = 'TỔNG CỘNG';
+        sheet.getCell(summaryRowIdx, summaryStartCol + 1).value = grandTotalOut;
+        sheet.getCell(summaryRowIdx, summaryStartCol + 2).value = grandTotalIn;
+        sheet.getCell(summaryRowIdx, summaryStartCol).style = { ...headerStyle, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFF00' } } };
+        sheet.getCell(summaryRowIdx, summaryStartCol + 1).style = { ...dataStyle, font: { bold: true }, numFmt: '#,##0' };
+        sheet.getCell(summaryRowIdx, summaryStartCol + 2).style = { ...dataStyle, font: { bold: true }, numFmt: '#,##0' };
+
+        // Finalize
+        sheet.columns.forEach(col => { col.width = 15; });
+        sheet.getColumn(1).width = 12;
+        sheet.getColumn(3).width = 30;
+        sheet.getColumn(summaryStartCol).width = 25;
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=Bao_Cao_Luan_Chuyen_${dayjs().format('YYYYMMDD')}.xlsx`);
+
+        await workbook.xlsx.write(res);
+        res.end();
+
+    } catch (e) {
+        console.error('Export Error:', e);
         res.status(500).json({ message: e.message });
     }
 };

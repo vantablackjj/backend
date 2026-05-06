@@ -220,8 +220,6 @@ const importData = async (req, res) => {
       "số km": "km_reading",
       "loại dịch vụ": "service_type",
       "tên dịch vụ": "service_name",
-      "mã pt": "part_code",
-      "mã phụ tùng": "part_code",
       "ghi chú tư vấn": "consultation_notes",
       "trừ kho": "update_inventory",
       "cập nhật kho": "update_inventory",
@@ -1155,7 +1153,7 @@ const importData = async (req, res) => {
 
                   // 4. Create PartPurchaseItem
                   const qty = Number(row.quantity) || 0;
-                  const unitPrice = Number(row.purchase_price) || 0;
+                  const unitPrice = Number(row.purchase_price) || Number(vPart.purchase_price) || 0;
                   const totalPrice = qty * unitPrice;
                   const conversion = vPart.default_conversion_rate || 1;
                   const baseQty = qty * conversion;
@@ -1505,7 +1503,7 @@ const importData = async (req, res) => {
                   row.engine_no ||
                   row.license_plate ||
                   row.customer_name ||
-                  row.part_code ||
+                  row.code ||
                   row.item_description
                 ) {
                   const vWarehouseId =
@@ -1601,7 +1599,7 @@ const importData = async (req, res) => {
                     row.phone || row.customer_phone || auto_phone || "";
                   const finalAddress =
                     row.address || row.customer_address || auto_address || "";
-                  const finalModel = row.model_name || auto_model || "";
+                  const finalModel = row.name || row.model_name || auto_model || "";
                   const finalPlate = row.license_plate || auto_plate || "";
 
                   // Find or create the order
@@ -1657,8 +1655,8 @@ const importData = async (req, res) => {
                   const price = Number(row.unit_price) || 0;
                   const itemTotal = qty * price;
 
-                  if (row.part_code) {
-                    const cleanPartCode = String(row.part_code)
+                  if (row.code) {
+                    const cleanPartCode = String(row.code)
                       .trim()
                       .toUpperCase();
                     const vPart = await Part.findOne({
@@ -1721,7 +1719,7 @@ const importData = async (req, res) => {
                           total_price: itemTotal,
                           type: "SERVICE",
                           description:
-                            row.item_description || row.part_code || "Dịch vụ",
+                            row.item_description || row.code || "Dịch vụ",
                           unit: row.unit || "Lần",
                         },
                         { transaction: t },
@@ -2121,10 +2119,10 @@ const downloadTemplate = async (req, res) => {
       dataSheet.getCell(i + 1, 9).value = Number(p.selling_price) || 0;
       dataSheet.getCell(i + 1, 10).value = Number(p.purchase_price) || 0;
     });
-    engineValues.forEach((v, i) => (dataSheet.getCell(i + 1, 7).value = v));
-    paymentMethods.forEach((v, i) => (dataSheet.getCell(i + 1, 8).value = v));
-    warrantyOptions.forEach((v, i) => (dataSheet.getCell(i + 1, 9).value = v));
-    vehicleClasses.forEach((v, i) => (dataSheet.getCell(i + 1, 10).value = v));
+    engineValues.forEach((v, i) => (dataSheet.getCell(i + 1, 12).value = v));
+    paymentMethods.forEach((v, i) => (dataSheet.getCell(i + 1, 13).value = v));
+    warrantyOptions.forEach((v, i) => (dataSheet.getCell(i + 1, 14).value = v));
+    vehicleClasses.forEach((v, i) => (dataSheet.getCell(i + 1, 26).value = v));
     units.forEach((v, i) => (dataSheet.getCell(i + 1, 11).value = v));
     genderOptions.forEach((v, i) => (dataSheet.getCell(i + 1, 15).value = v));
     saleTypes.forEach((v, i) => (dataSheet.getCell(i + 1, 16).value = v));
@@ -2159,15 +2157,15 @@ const downloadTemplate = async (req, res) => {
         "Tên kho": { col: "D", search: true },
       },
       retail_sales: {
-        "Số máy": { col: "G", search: true },
+        "Số máy": { col: "L", search: true },
         "Tên kho": { col: "D", search: true },
         "Hình thức TT": {
-          col: "H",
+          col: "M",
           search: false,
           count: paymentMethods.length,
         },
         "Phát sổ bảo hành": {
-          col: "I",
+          col: "N",
           search: false,
           count: warrantyOptions.length,
         },
@@ -2176,11 +2174,11 @@ const downloadTemplate = async (req, res) => {
         "Người bán": { col: "Q", search: true },
       },
       wholesale_sales: {
-        "Số máy": { col: "G", search: true },
+        "Số máy": { col: "L", search: true },
         "Tên kho": { col: "D", search: true },
         "Mã khách hàng": { col: "E", search: true },
         "Hình thức TT": {
-          col: "H",
+          col: "M",
           search: false,
           count: paymentMethods.length,
         },
@@ -2209,7 +2207,7 @@ const downloadTemplate = async (req, res) => {
         "Mã liên kết": { col: "F", search: true },
       },
       types: {
-        "Phân loại": { col: "J", search: false, count: vehicleClasses.length },
+        "Phân loại": { col: "Z", search: false, count: vehicleClasses.length },
       },
       suppliers: {
         "Hình thức TT": {
@@ -2226,7 +2224,7 @@ const downloadTemplate = async (req, res) => {
         },
       },
       expenses: {
-        "Số máy": { col: "G", search: true },
+        "Số máy": { col: "L", search: true },
         "Tên kho": { col: "D", search: true },
       },
       maintenance: {
@@ -2330,13 +2328,13 @@ const downloadTemplate = async (req, res) => {
       }
 
       for (let i = 2; i <= 1000; i++) {
-        // Column C = Mã PT (Dropdown), D = Tên PT, F = DNP (Price)z
-        // Data_Source: Col F(6) = Code, Col L(12) = Name, Col N(14) = Price
+        // Column C = Mã PT (Dropdown), D = Tên PT, F = DNP (Price)
+        // Data_Source: Col F(6) = Code, Col G(7) = Name, Col J(10) = Purchase Price
         mainSheet.getCell(i, 4).value = {
-          formula: `IFERROR(VLOOKUP(C${i}, Data_Source!$F:$N, 7, FALSE), "")`,
+          formula: `IFERROR(VLOOKUP(C${i}, Data_Source!$F:$J, 2, FALSE), "")`,
         };
         mainSheet.getCell(i, 6).value = {
-          formula: `IFERROR(VLOOKUP(C${i}, Data_Source!$F:$N, 9, FALSE), 0)`,
+          formula: `IFERROR(VLOOKUP(C${i}, Data_Source!$F:$J, 5, FALSE), 0)`,
         };
         // Thành tiền chưa VAT (G) = E * F
         mainSheet.getCell(i, 7).value = { formula: `E${i}*F${i}` };

@@ -1,8 +1,21 @@
 const Supplier = require('../models/Supplier');
+const { Op } = require('sequelize');
 
 exports.getAll = async (req, res) => {
   try {
-    const list = await Supplier.findAll({ order: [['createdAt', 'DESC']] });
+    const { type } = req.query;
+    const where = {};
+    if (type) {
+      if (type === 'PART') {
+        where.type = { [Op.in]: ['PART', 'BOTH'] };
+      } else if (type === 'VEHICLE') {
+        where.type = { [Op.in]: ['VEHICLE', 'BOTH'] };
+      }
+    }
+    const list = await Supplier.findAll({ 
+      where,
+      order: [['createdAt', 'DESC']] 
+    });
     res.json(list);
   } catch (error) {
     res.status(500).json({ message: error.message });

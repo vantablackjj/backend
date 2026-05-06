@@ -307,7 +307,7 @@ exports.getTransfers = async (req, res) => {
 
         if (req.user.role !== 'ADMIN' && req.user.role !== 'MANAGER') {
             const allowed = req.user.allowedWarehouses;
-            if (warehouse_id) {
+            if (warehouse_id && warehouse_id !== 'undefined' && warehouse_id !== '') {
                 if (!allowed.includes(warehouse_id)) {
                     return res.status(403).json({ message: "Bạn không có quyền xem dữ liệu kho này" });
                 }
@@ -315,15 +315,16 @@ exports.getTransfers = async (req, res) => {
                     { [Op.or]: [{ from_warehouse_id: warehouse_id }, { to_warehouse_id: warehouse_id }] }
                 ];
             } else {
-                where[Op.or] = [
-                    { from_warehouse_id: { [Op.in]: allowed } },
-                    { to_warehouse_id: { [Op.in]: allowed } }
+                where[Op.and] = [
+                    { [Op.or]: [
+                        { from_warehouse_id: { [Op.in]: allowed } },
+                        { to_warehouse_id: { [Op.in]: allowed } }
+                    ] }
                 ];
             }
-        } else if (warehouse_id) {
-            where[Op.or] = [
-                { from_warehouse_id: warehouse_id },
-                { to_warehouse_id: warehouse_id }
+        } else if (warehouse_id && warehouse_id !== 'undefined' && warehouse_id !== '') {
+            where[Op.and] = [
+                { [Op.or]: [{ from_warehouse_id: warehouse_id }, { to_warehouse_id: warehouse_id }] }
             ];
         }
 

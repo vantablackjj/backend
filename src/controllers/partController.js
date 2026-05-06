@@ -728,6 +728,113 @@ const createPartSale = async (req, res) => {
   }
 };
 
+const updatePartPurchase = async (req, res) => {
+  const t = await sequelize.transaction();
+  try {
+    const { id } = req.params;
+    const {
+      supplier_id,
+      purchase_date,
+      invoice_no,
+      items,
+      vat_percent,
+      notes,
+      paid_amount,
+    } = req.body;
+
+    const purchase = await PartPurchase.findByPk(id, {
+      include: [PartPurchaseItem],
+      transaction: t,
+    });
+
+    if (!purchase) throw new Error("Không tìm thấy đơn nhập");
+
+    // 1. REVERSE OLD INVENTORY
+    for (const oldItem of purchase.PartPurchaseItems) {
+      const vPart = await Part.findByPk(oldItem.part_id, { transaction: t });
+      const inventoryPartId = vPart.linked_part_id || vPart.id;
+      const inventory = await PartInventory.findOne({
+        where: { part_id: inventoryPartId, warehouse_id: purchase.warehouse_id },
+        transaction: t,
+      });
+      if (inventory) {
+        await inventory.decrement("quantity", {
+          by: oldItem.base_quantity,
+          transaction: t,
+        });
+      }
+    }
+
+    // 2. DELETE OLD ITEMS
+    await PartPurchaseItem.destroy({
+      where: { purchase_id: id },
+      transaction: t,
+    });
+
+    // 3. CREATE NEW ITEMS & UPDATE INVENTORY
+    let total_amount = 0;
+    for (const item of items) {
+      const base_quantity = Number(item.quantity) * Number(item.conversion_rate || 1);
+      const total_price = Number(item.quantity) * Number(item.unit_price);
+      total_amount += total_price;
+
+      await PartPurchaseItem.create(
+        {
+          purchase_id: id,
+          part_id: item.part_id,
+          quantity: item.quantity,
+          unit: item.unit,
+          conversion_rate: item.conversion_rate || 1,
+          base_quantity,
+          unit_price: item.unit_price,
+          total_price,
+          location: item.location,
+        },
+        { transaction: t },
+      );
+
+      const vPart = await Part.findByPk(item.part_id, { transaction: t });
+      const inventoryPartId = vPart.linked_part_id || vPart.id;
+
+      const [inventory] = await PartInventory.findOrCreate({
+        where: { part_id: inventoryPartId, warehouse_id: purchase.warehouse_id },
+        defaults: { part_id: inventoryPartId, warehouse_id: purchase.warehouse_id, quantity: 0 },
+        transaction: t,
+      });
+
+      await inventory.increment("quantity", {
+        by: base_quantity,
+        transaction: t,
+      });
+
+      if (item.location) {
+        await inventory.update({ location: item.location }, { transaction: t });
+      }
+    }
+
+    // 4. UPDATE PURCHASE MASTER
+    const final_total = total_amount * (1 + (vat_percent || 0) / 100);
+    await purchase.update(
+      {
+        supplier_id,
+        purchase_date,
+        invoice_no,
+        vat_percent,
+        notes,
+        paid_amount: paid_amount || 0,
+        total_amount: final_total,
+      },
+      { transaction: t },
+    );
+
+    await t.commit();
+    res.json({ message: "Cập nhật đơn nhập thành công", purchase });
+  } catch (error) {
+    if (t) await t.rollback();
+    res.status(400).json({ message: error.message });
+  }
+};
+
 const getPartPurchases = async (req, res) => {
   try {
     const where = {};
@@ -1417,6 +1524,7 @@ module.exports = {
   getPartPurchases,
   getPartSales,
   updatePartPurchasePayment,
+  updatePartPurchase,
   deletePartPurchase,
   updatePartSalePayment,
   deletePartSale,

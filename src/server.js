@@ -265,8 +265,8 @@ const startServer = async () => {
     // Vá cấu trúc DB nếu thiếu cột hoặc enum
     await fixDatabaseSchema();
 
-    // Sync all models 
-    await sequelize.sync({ alter: true });
+    // Sync all models (Sử dụng fixDb.js để vá thay vì alter: true để tránh treo)
+    await sequelize.sync();
 
     console.log('✅ Các bảng đã được đồng bộ hóa.');
 
@@ -284,3 +284,5 @@ const startServer = async () => {
 };
 
 startServer();
+// Trigger restart to clear port conflict
+// Server initialized successfully
